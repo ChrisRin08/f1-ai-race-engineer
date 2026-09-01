@@ -11,17 +11,24 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
 # Node
 node_modules/
 .next/
 dist/
 build/
+coverage/
+.vercel/
 
 # IDE
 .vscode/
 .idea/
 
 # FastF1 cache/data
-cache/
-data/
+backend/cache/
+backend/data/
