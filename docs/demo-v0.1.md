@@ -55,7 +55,7 @@ The following are explicitly out of scope for Demo v0.1 unless the plan changes:
 - LLM-generated strategy calculations
 - Cache eviction, Docker volumes, or production cache infrastructure
 - CI/CD workflow creation
-- Concrete API route finalization
+- Additional API routes beyond the initial control-session contract
 
 ## Acceptance Criteria
 

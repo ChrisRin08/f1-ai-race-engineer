@@ -50,13 +50,13 @@ The architecture should support generic season/event/session queries, but Demo v
 
 ## API Direction
 
-Concrete FastAPI routes are not finalized yet. Conceptually, the future API should be shaped around Formula 1 resources in this hierarchy:
+Feature `001-backend-f1-data-access` defines the first session-summary route around this Formula 1 resource hierarchy:
 
 ```text
 year -> event -> session
 ```
 
-The first implementation may validate one known session before exposing broader selection. It should still preserve the generic direction so later dynamic year, event, session, and driver queries can be added without replacing the core model.
+The initial contract uses `GET /api/v1/seasons/{year}/events/{event}/sessions/{session}` and guarantees only the Monza control session. Broader route coverage and dynamic selection remain future work; the control dataset does not replace the generic resource model.
 
 ## Initial Analytics Slice
 

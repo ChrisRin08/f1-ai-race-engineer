@@ -1,0 +1,244 @@
+openapi: 3.1.0
+info:
+  title: F1 AI Race Engineer Backend
+  version: 0.1.0
+  description: >-
+    Contract for backend availability and the first FastF1-backed session
+    summary. Only the documented control session is guaranteed in this feature.
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Confirm backend availability
+      responses:
+        "200":
+          description: Backend is available.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /api/v1/seasons/{year}/events/{event}/sessions/{session}:
+    get:
+      operationId: getSessionSummary
+      summary: Get a Formula 1 session summary
+      parameters:
+        - name: year
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1950
+        - name: event
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        - name: session
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+      responses:
+        "200":
+          description: Deterministic summary from the available FastF1 snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionSummary"
+        "404":
+          description: The well-formed session tuple is not supported.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: One or more path parameters are malformed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPValidationError"
+        "503":
+          description: The supported session cannot be served from FastF1.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: ok
+    SessionSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - year
+        - event
+        - session
+        - circuit
+        - timing
+        - participants
+        - data_availability
+        - source
+      properties:
+        year:
+          type: integer
+        event:
+          $ref: "#/components/schemas/EventSummary"
+        session:
+          $ref: "#/components/schemas/SessionIdentity"
+        circuit:
+          $ref: "#/components/schemas/CircuitSummary"
+        timing:
+          $ref: "#/components/schemas/SessionTiming"
+        participants:
+          type: array
+          items:
+            $ref: "#/components/schemas/Participant"
+        data_availability:
+          $ref: "#/components/schemas/DataAvailability"
+        source:
+          $ref: "#/components/schemas/SourceProvenance"
+    EventSummary:
+      type: object
+      additionalProperties: false
+      required: [name, round_number, country, location]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        round_number:
+          type: [integer, "null"]
+          minimum: 1
+        country:
+          type: [string, "null"]
+        location:
+          type: [string, "null"]
+    SessionIdentity:
+      type: object
+      additionalProperties: false
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        type:
+          type: string
+          minLength: 1
+    CircuitSummary:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+    SessionTiming:
+      type: object
+      additionalProperties: false
+      required: [scheduled_start_utc, total_laps]
+      properties:
+        scheduled_start_utc:
+          type: string
+          format: date-time
+        total_laps:
+          type: [integer, "null"]
+          minimum: 1
+    Participant:
+      type: object
+      additionalProperties: false
+      required:
+        - position
+        - driver_number
+        - abbreviation
+        - full_name
+        - team_name
+      properties:
+        position:
+          type: [integer, "null"]
+          minimum: 1
+        driver_number:
+          type: string
+          minLength: 1
+        abbreviation:
+          type: [string, "null"]
+        full_name:
+          type: [string, "null"]
+        team_name:
+          type: [string, "null"]
+    AvailabilityStatus:
+      type: string
+      enum: [available, unavailable, not_requested]
+    DataAvailability:
+      type: object
+      additionalProperties: false
+      required:
+        - session_info
+        - results
+        - laps
+        - telemetry
+        - weather
+        - race_control_messages
+      properties:
+        session_info:
+          $ref: "#/components/schemas/AvailabilityStatus"
+        results:
+          $ref: "#/components/schemas/AvailabilityStatus"
+        laps:
+          $ref: "#/components/schemas/AvailabilityStatus"
+        telemetry:
+          $ref: "#/components/schemas/AvailabilityStatus"
+        weather:
+          $ref: "#/components/schemas/AvailabilityStatus"
+        race_control_messages:
+          $ref: "#/components/schemas/AvailabilityStatus"
+    SourceProvenance:
+      type: object
+      additionalProperties: false
+      required: [provider]
+      properties:
+        provider:
+          type: string
+          const: FastF1
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+    ValidationError:
+      type: object
+      properties:
+        loc:
+          type: array
+          items:
+            anyOf:
+              - type: string
+              - type: integer
+        msg:
+          type: string
+        type:
+          type: string
+      required: [loc, msg, type]
+    HTTPValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidationError"

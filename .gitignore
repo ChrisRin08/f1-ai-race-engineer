@@ -32,3 +32,8 @@ coverage/
 # FastF1 cache/data
 backend/cache/
 backend/data/
+
+# Spec Kit local/cache state
+.specify/extensions/.cache/
+.specify/extensions/.backup/
+.specify/extensions/*/local-config.yml
