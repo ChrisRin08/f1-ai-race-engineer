@@ -89,17 +89,17 @@ path when network access is available.
 
 ### Tests for User Story 2
 
-- [ ] T010 [P] [US2] Write failing deterministic mapping tests for source timestamps, participant ordering, null preservation, circuit fallback, required-data failures, and availability statuses in `backend/tests/test_f1_data.py`
-- [ ] T011 [P] [US2] Write failing API tests for `/api/v1/seasons/2025/events/italian-grand-prix/sessions/race`, exact response shape, repeated-response equality, and `503 data_source_unavailable` behavior using controlled doubles in `backend/tests/test_sessions.py`
-- [ ] T012 [P] [US2] Write the separately marked real-data control-session validation without running it during routine tests in `backend/tests/test_f1_data_integration.py`
+- [x] T010 [P] [US2] Write failing deterministic mapping tests for source timestamps, participant ordering, null preservation, circuit fallback, required-data failures, and availability statuses in `backend/tests/test_f1_data.py`
+- [x] T011 [P] [US2] Write failing API tests for `/api/v1/seasons/2025/events/italian-grand-prix/sessions/race`, exact response shape, repeated-response equality, and `503 data_source_unavailable` behavior using controlled doubles in `backend/tests/test_sessions.py`
+- [x] T012 [P] [US2] Write the separately marked real-data control-session validation without running it during routine tests in `backend/tests/test_f1_data_integration.py`
 
 ### Implementation for User Story 2
 
-- [ ] T013 [P] [US2] Implement the session, event, circuit, timing, participant, availability, provenance, and error response models from `contracts/openapi.yaml` in `backend/app/models.py`
-- [ ] T014 [P] [US2] After `backend/uv.lock` pins FastF1, inspect that locked version's actual source and data-loading exception behavior, then implement repo-relative `backend/cache/fastf1/` creation, FastF1 cache activation, control-session loading with laps enabled and telemetry/weather/messages disabled, and narrow source-related exception translation in `backend/app/f1_data.py`; map only justified source failures to `data_source_unavailable` / HTTP `503`, never use broad `except Exception` mapping, and do not guess exception classes before the dependency is locked
-- [ ] T015 [US2] Implement deterministic FastF1-to-SessionSummary mapping, UTC serialization, stable participant ordering, source-null handling, and required-field checks in `backend/app/f1_data.py`
-- [ ] T016 [US2] Add the synchronous control-session route and map expected source failures to the contracted HTTP `503` response in `backend/app/main.py`
-- [ ] T017 [US2] Run and satisfy the routine User Story 2 tests without network access in `backend/tests/test_f1_data.py` and `backend/tests/test_sessions.py`
+- [x] T013 [P] [US2] Implement the session, event, circuit, timing, participant, availability, provenance, and error response models from `contracts/openapi.yaml` in `backend/app/models.py`
+- [x] T014 [P] [US2] After `backend/uv.lock` pins FastF1, inspect that locked version's actual source and data-loading exception behavior, then implement repo-relative `backend/cache/fastf1/` creation, FastF1 cache activation, control-session loading with laps enabled and telemetry/weather/messages disabled, and narrow source-related exception translation in `backend/app/f1_data.py`; map only justified source failures to `data_source_unavailable` / HTTP `503`, never use broad `except Exception` mapping, and do not guess exception classes before the dependency is locked
+- [x] T015 [US2] Implement deterministic FastF1-to-SessionSummary mapping, UTC serialization, stable participant ordering, source-null handling, and required-field checks in `backend/app/f1_data.py`
+- [x] T016 [US2] Add the synchronous control-session route and map expected source failures to the contracted HTTP `503` response in `backend/app/main.py`
+- [x] T017 [US2] Run and satisfy the routine User Story 2 tests without network access in `backend/tests/test_f1_data.py` and `backend/tests/test_sessions.py`
 
 **Checkpoint**: The control-session API works deterministically with controlled
 data and the real-data test exists but remains outside routine execution.
@@ -117,13 +117,13 @@ outside current support, and HTTP `422` for malformed path input.
 
 ### Tests for User Story 3
 
-- [ ] T018 [US3] Write failing tests for generic path parameters, control-tuple identity, malformed `422` responses, unsupported `404 session_not_supported` responses, and no source call for unsupported requests in `backend/tests/test_sessions.py`
+- [x] T018 [US3] Write failing tests for generic path parameters, control-tuple identity, malformed `422` responses, unsupported `404 session_not_supported` responses, and no source call for unsupported requests in `backend/tests/test_sessions.py`
 
 ### Implementation for User Story 3
 
-- [ ] T019 [US3] Add year and slug path validation plus the explicit control-tuple support check to `backend/app/main.py`
-- [ ] T020 [US3] Add canonical API-to-FastF1 identifier mapping without exposing FastF1 aliases as permanent API identifiers in `backend/app/f1_data.py`
-- [ ] T021 [US3] Run and satisfy the complete generic-resource and error-boundary test set in `backend/tests/test_sessions.py`
+- [x] T019 [US3] Add year and slug path validation plus the explicit control-tuple support check to `backend/app/main.py`
+- [x] T020 [US3] Add canonical public API-to-FastF1/source identifier resolution in `backend/app/main.py` and parameterize `load_session_summary(...)` in `backend/app/f1_data.py` to accept already-resolved source identifiers without permanently hardcoding the control tuple
+- [x] T021 [US3] Run and satisfy the complete generic-resource and error-boundary test set in `backend/tests/test_sessions.py`
 
 **Checkpoint**: The public contract has a generic resource shape without
 claiming unsupported dynamic coverage.
@@ -141,7 +141,7 @@ real-data integration test is excluded.
 
 ### Tests and Test Configuration for User Story 4
 
-- [ ] T022 [P] [US4] Add the regression case proving `GET /health` remains successful when the FastF1 loader fails in `backend/tests/test_health.py`
+- [x] T022 [P] [US4] Add the regression case proving `GET /health` remains successful when the FastF1 loader fails in `backend/tests/test_health.py`
 - [ ] T023 [P] [US4] Register the `integration` marker and exclude it from default pytest execution in `backend/pyproject.toml`
 - [ ] T024 [US4] Consolidate controlled fixtures and verify that routine tests cannot accidentally invoke the real FastF1 loader in `backend/tests/conftest.py`, `backend/tests/test_f1_data.py`, and `backend/tests/test_sessions.py`
 - [ ] T025 [US4] Run and satisfy the complete network-independent test suite from `backend/`, confirming `backend/tests/test_f1_data_integration.py` is deselected by default
