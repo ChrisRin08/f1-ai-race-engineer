@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
+import fastf1
 import numpy as np
 import pandas as pd
 import pytest
@@ -12,6 +13,14 @@ from pydantic import ValidationError
 from app.models import SessionTiming
 
 CONTROL_SOURCE_IDENTIFIERS = (2025, "Italian Grand Prix", "Race")
+
+
+def test_routine_tests_block_uncontrolled_fastf1_session_access() -> None:
+    with pytest.raises(
+        AssertionError,
+        match="Routine tests must not access the real FastF1 session source",
+    ):
+        fastf1.get_session(*CONTROL_SOURCE_IDENTIFIERS)
 
 
 def load_mapping_boundary():

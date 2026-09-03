@@ -142,9 +142,9 @@ real-data integration test is excluded.
 ### Tests and Test Configuration for User Story 4
 
 - [x] T022 [P] [US4] Add the regression case proving `GET /health` remains successful when the FastF1 loader fails in `backend/tests/test_health.py`
-- [ ] T023 [P] [US4] Register the `integration` marker and exclude it from default pytest execution in `backend/pyproject.toml`
-- [ ] T024 [US4] Consolidate controlled fixtures and verify that routine tests cannot accidentally invoke the real FastF1 loader in `backend/tests/conftest.py`, `backend/tests/test_f1_data.py`, and `backend/tests/test_sessions.py`
-- [ ] T025 [US4] Run and satisfy the complete network-independent test suite from `backend/`, confirming `backend/tests/test_f1_data_integration.py` is deselected by default
+- [x] T023 [P] [US4] Register the `integration` marker and exclude it from default pytest execution in `backend/pyproject.toml`
+- [x] T024 [US4] Consolidate controlled fixtures and verify that routine tests cannot accidentally invoke the real FastF1 loader in `backend/tests/conftest.py`, `backend/tests/test_f1_data.py`, and `backend/tests/test_sessions.py`
+- [x] T025 [US4] Run and satisfy the complete network-independent test suite from `backend/`, confirming `backend/tests/test_f1_data_integration.py` is deselected by default
 
 **Checkpoint**: Routine backend behavior is fully automated, deterministic,
 and independent of external service availability.

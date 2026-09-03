@@ -2,15 +2,13 @@ import os
 
 import pytest
 
-if os.getenv("F1_RUN_INTEGRATION") != "1":
-    pytest.skip(
-        "Set F1_RUN_INTEGRATION=1 to run the real FastF1 integration test.",
-        allow_module_level=True,
-    )
-
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.skipif(
+    os.getenv("F1_RUN_INTEGRATION") != "1",
+    reason="Set F1_RUN_INTEGRATION=1 to run the real FastF1 integration test.",
+)
 def test_real_monza_race_session_maps_to_control_summary() -> None:
     import fastf1
 
