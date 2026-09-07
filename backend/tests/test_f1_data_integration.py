@@ -10,18 +10,17 @@ pytestmark = pytest.mark.integration
     reason="Set F1_RUN_INTEGRATION=1 to run the real FastF1 integration test.",
 )
 def test_real_monza_race_session_maps_to_control_summary() -> None:
-    import fastf1
+    from app.f1_data import load_session_summary
 
-    from app.f1_data import map_session_summary
-
-    session = fastf1.get_session(2025, "Italian Grand Prix", "Race")
-    session.load(laps=True, telemetry=False, weather=False, messages=False)
-
-    summary = map_session_summary(session)
+    summary = load_session_summary(2025, "Italian Grand Prix", "Race")
 
     assert summary.year == 2025
     assert summary.event.name == "Italian Grand Prix"
+    assert summary.event.location == "Monza"
     assert summary.session.name == "Race"
+    assert summary.session.type == "race"
+    assert summary.circuit.name == "Monza"
     assert summary.participants
-    assert summary.timing.scheduled_start_utc is not None
+    assert summary.data_availability.results == "available"
+    assert summary.data_availability.laps == "available"
     assert summary.source.provider == "FastF1"

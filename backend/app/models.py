@@ -12,12 +12,12 @@ from pydantic import (
 )
 
 
-class HealthResponse(BaseModel):
-    status: Literal["ok"]
-
-
 class ContractModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class HealthResponse(ContractModel):
+    status: Literal["ok"]
 
 
 class EventSummary(ContractModel):

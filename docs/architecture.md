@@ -79,7 +79,7 @@ Chosen technologies for the initial architecture:
 - Backend: Python 3.12, FastAPI, uv, pytest, Ruff
 - Analytics/data: FastF1, Pandas, NumPy
 
-FastF1 will use a repo-local ignored cache location, currently planned as `backend/cache/`, when it is introduced. Race data should not be downloaded during Day 1 setup.
+FastF1 uses the ignored repo-local `backend/cache/fastf1/` cache. The backend resolves this path from its project location, creates it on first data access, and enables FastF1's disk cache there. Application import and health checks do not create the cache or load race data.
 
 Cache growth is a known future concern. Do not implement cache eviction, Docker volumes, or production cache infrastructure during Day 1. Revisit cache strategy before containerized or production deployment.
 

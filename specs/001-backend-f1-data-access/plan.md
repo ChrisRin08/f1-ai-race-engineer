@@ -140,7 +140,7 @@ Real-data verification is explicit because it may download data and depends on
 external services:
 
 ```text
-uv run pytest -m integration
+F1_RUN_INTEGRATION=1 uv run --frozen --no-sync pytest -m integration
 ```
 
 ## Complexity Tracking

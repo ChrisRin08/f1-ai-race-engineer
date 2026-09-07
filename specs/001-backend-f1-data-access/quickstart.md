@@ -7,7 +7,7 @@ authorize implementation or data download during planning.
 
 - uv installed
 - Python 3.12 available to uv
-- Network access only for the explicit real-data validation
+- Network access for initial dependency setup when needed and intentional real-data validation
 
 All commands below start from the repository root.
 
@@ -15,7 +15,7 @@ All commands below start from the repository root.
 
 ```bash
 cd backend
-uv sync
+uv sync --locked
 ```
 
 Expected result: uv creates or updates `backend/.venv/` from the committed
@@ -25,13 +25,20 @@ Expected result: uv creates or updates `backend/.venv/` from the committed
 
 ```bash
 cd backend
-uv run ruff format --check .
-uv run ruff check .
-uv run pytest
+uv run --offline --frozen --no-sync ruff format --check .
+uv run --offline --frozen --no-sync ruff check --no-cache .
+uv run --offline --frozen --no-sync pytest
 ```
 
 Expected result: formatting, linting, and routine tests pass without contacting
-FastF1. The default test selection excludes the `integration` marker.
+FastF1. Keep `F1_RUN_INTEGRATION` unset. The default test selection deselects
+tests marked `integration`. Explicit selection without opt-in safely skips the
+real test:
+
+```bash
+cd backend
+env -u F1_RUN_INTEGRATION uv run --offline --frozen --no-sync pytest -m integration
+```
 
 ## Start the API
 
@@ -74,8 +81,10 @@ Expected result: HTTP `200` with the shape defined in
 - availability statuses for session data categories
 - `source.provider` equal to `FastF1`
 
-The first successful load creates generated cache content under
-`backend/cache/fastf1/`. That directory must remain ignored by Git.
+The loader creates and enables the repo-local `backend/cache/fastf1/` cache on
+first data access, even if the subsequent source load fails. Generated cache
+content stays under that path, ignored by the `backend/cache/` rule in
+`.gitignore`. Application import and health checks do not create the cache.
 
 ## Validate Error Boundaries
 
@@ -104,13 +113,14 @@ is separate from routine tests and may access external services:
 
 ```bash
 cd backend
-uv run pytest -m integration
+F1_RUN_INTEGRATION=1 uv run --frozen --no-sync pytest -m integration
 ```
 
-Expected result: the control session loads through FastF1 and satisfies the
-minimum identity, participant, timing, and provenance assertions. A network or
-upstream outage is reported as an integration failure, not replaced with fake
-data.
+Expected result: the control session loads through the application's
+`load_session_summary(...)` boundary and satisfies the identity, Monza
+circuit/location, participant, results/laps availability, and FastF1 provenance
+assertions. A network or upstream outage is reported as an integration failure,
+not replaced with fake data.
 
 ## Final Repository Check
 

@@ -14,7 +14,7 @@ _SUPPORTED_SESSIONS = {
 }
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/health", response_model=HealthResponse, operation_id="getHealth")
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
 
@@ -22,6 +22,7 @@ def health() -> HealthResponse:
 @app.get(
     "/api/v1/seasons/{year}/events/{event}/sessions/{session}",
     response_model=SessionSummary,
+    operation_id="getSessionSummary",
     responses={404: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
 )
 def get_session_summary(

@@ -156,11 +156,11 @@ and independent of external service availability.
 **Purpose**: Reconcile documentation and contracts, run all quality gates, and
 perform the explicit real-data acceptance check.
 
-- [ ] T026 [P] Update backend setup, run, test, and current-status instructions after implementation in `README.md`
-- [ ] T027 Compare FastAPI's generated OpenAPI document with `specs/001-backend-f1-data-access/contracts/openapi.yaml` and reconcile route or schema mismatches in `backend/app/main.py` and `backend/app/models.py`
-- [ ] T028 Run `uv run ruff format --check .`, `uv run ruff check .`, and the routine `uv run pytest` quality gates from `backend/`, fixing only feature-related findings in `backend/app/` and `backend/tests/`
-- [ ] T029 Run the explicit `uv run pytest -m integration` control-session check with network access, verify generated data stays under ignored `backend/cache/fastf1/`, and confirm the cache ignore rule in `.gitignore`
-- [ ] T030 Execute every validation scenario in `specs/001-backend-f1-data-access/quickstart.md`, update stale instructions there, and review the final implementation against `specs/001-backend-f1-data-access/spec.md`, `specs/001-backend-f1-data-access/plan.md`, and `.specify/memory/constitution.md`
+- [x] T026 [P] Update backend setup, run, test, and current-status instructions after implementation in `README.md`
+- [x] T027 Compare FastAPI's generated OpenAPI document with `specs/001-backend-f1-data-access/contracts/openapi.yaml` and reconcile route or schema mismatches in `backend/app/main.py` and `backend/app/models.py`
+- [x] T028 Run `uv run ruff format --check .`, `uv run ruff check .`, and the routine `uv run pytest` quality gates from `backend/`, fixing only feature-related findings in `backend/app/` and `backend/tests/`
+- [x] T029 Run the explicit `uv run pytest -m integration` control-session check with network access, verify generated data stays under ignored `backend/cache/fastf1/`, and confirm the cache ignore rule in `.gitignore`
+- [x] T030 Execute every validation scenario in `specs/001-backend-f1-data-access/quickstart.md`, update stale instructions there, and review the final implementation against `specs/001-backend-f1-data-access/spec.md`, `specs/001-backend-f1-data-access/plan.md`, and `.specify/memory/constitution.md`
 
 ---
 
