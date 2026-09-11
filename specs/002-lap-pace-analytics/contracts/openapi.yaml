@@ -1,0 +1,755 @@
+openapi: 3.1.0
+info:
+  title: F1 AI Race Engineer Backend
+  version: 0.1.0
+  description: >-
+    Contract for backend availability, FastF1-backed session summaries, and
+    deterministic representative race-pace analytics. Only the documented
+    2025 Italian Grand Prix Race control session is currently guaranteed.
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Confirm backend availability
+      responses:
+        "200":
+          description: Backend is available.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /api/v1/seasons/{year}/events/{event}/sessions/{session}:
+    get:
+      operationId: getSessionSummary
+      summary: Get a Formula 1 session summary
+      parameters:
+        - name: year
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1950
+        - name: event
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        - name: session
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+      responses:
+        "200":
+          description: Deterministic summary from the available FastF1 snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionSummary"
+        "404":
+          description: The well-formed session tuple is not supported.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: One or more path parameters are malformed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPValidationError"
+        "503":
+          description: The supported session cannot be served from FastF1.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/seasons/{year}/events/{event}/sessions/{session}/pace:
+    get:
+      operationId: getSessionPaceAnalysis
+      summary: Get representative race pace for the session field
+      parameters:
+        - $ref: "#/components/parameters/Year"
+        - $ref: "#/components/parameters/Event"
+        - $ref: "#/components/parameters/Session"
+      responses:
+        "200":
+          description: One deterministic field analysis from one FastF1 snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionPaceAnalysisResponse"
+        "404":
+          description: The well-formed session tuple is not supported.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/DataSourceUnavailable"
+  /api/v1/seasons/{year}/events/{event}/sessions/{session}/pace/drivers/{driver_number}:
+    get:
+      operationId: getDriverPaceAnalysis
+      summary: Get one driver's representative race pace and lap evidence
+      parameters:
+        - $ref: "#/components/parameters/Year"
+        - $ref: "#/components/parameters/Event"
+        - $ref: "#/components/parameters/Session"
+        - $ref: "#/components/parameters/DriverNumber"
+      responses:
+        "200":
+          description: Driver analysis projected from one complete field analysis.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriverPaceAnalysisResponse"
+        "404":
+          description: The session is unsupported or the driver is not in its results.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/DataSourceUnavailable"
+  /api/v1/seasons/{year}/events/{event}/sessions/{session}/pace/drivers/{driver_a}/comparisons/{driver_b}:
+    get:
+      operationId: compareDriverPace
+      summary: Compare two drivers' representative race pace
+      parameters:
+        - $ref: "#/components/parameters/Year"
+        - $ref: "#/components/parameters/Event"
+        - $ref: "#/components/parameters/Session"
+        - $ref: "#/components/parameters/DriverA"
+        - $ref: "#/components/parameters/DriverB"
+      responses:
+        "200":
+          description: Directional A-minus-B comparison from one field analysis.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriverPaceComparisonResponse"
+        "404":
+          description: The session is unsupported or a driver is not in its results.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/DataSourceUnavailable"
+components:
+  parameters:
+    Year:
+      name: year
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1950
+    Event:
+      name: event
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    Session:
+      name: session
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    DriverNumber:
+      name: driver_number
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[1-9][0-9]*$"
+    DriverA:
+      name: driver_a
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[1-9][0-9]*$"
+    DriverB:
+      name: driver_b
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[1-9][0-9]*$"
+  responses:
+    ValidationError:
+      description: One or more path parameters are malformed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/HTTPValidationError"
+    DataSourceUnavailable:
+      description: The supported session cannot be served from FastF1.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: ok
+    SessionSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - year
+        - event
+        - session
+        - circuit
+        - timing
+        - participants
+        - data_availability
+        - source
+      properties:
+        year:
+          type: integer
+        event:
+          $ref: "#/components/schemas/EventSummary"
+        session:
+          $ref: "#/components/schemas/SessionIdentity"
+        circuit:
+          $ref: "#/components/schemas/CircuitSummary"
+        timing:
+          $ref: "#/components/schemas/SessionTiming"
+        participants:
+          type: array
+          items:
+            $ref: "#/components/schemas/Participant"
+        data_availability:
+          $ref: "#/components/schemas/DataAvailability"
+        source:
+          $ref: "#/components/schemas/SourceProvenance"
+    EventSummary:
+      type: object
+      additionalProperties: false
+      required: [name, round_number, country, location]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        round_number:
+          type: [integer, "null"]
+          minimum: 1
+        country:
+          type: [string, "null"]
+        location:
+          type: [string, "null"]
+    SessionIdentity:
+      type: object
+      additionalProperties: false
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        type:
+          type: string
+          minLength: 1
+    CircuitSummary:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+    SessionTiming:
+      type: object
+      additionalProperties: false
+      required: [scheduled_start_utc, total_laps]
+      properties:
+        scheduled_start_utc:
+          type: string
+          format: date-time
+        total_laps:
+          type: [integer, "null"]
+          minimum: 1
+    Participant:
+      type: object
+      additionalProperties: false
+      required:
+        - position
+        - driver_number
+        - abbreviation
+        - full_name
+        - team_name
+      properties:
+        position:
+          type: [integer, "null"]
+          minimum: 1
+        driver_number:
+          type: string
+          minLength: 1
+        abbreviation:
+          type: [string, "null"]
+        full_name:
+          type: [string, "null"]
+        team_name:
+          type: [string, "null"]
+    AvailabilityStatus:
+      type: string
+      enum: [available, unavailable, not_requested]
+    DataAvailability:
+      type: object
+      additionalProperties: false
+      required:
+        - session_info
+        - results
+        - laps
+        - telemetry
+        - weather
+        - race_control_messages
+      properties:
+        session_info:
+          $ref: "#/components/schemas/AvailabilityStatus"
+        results:
+          $ref: "#/components/schemas/AvailabilityStatus"
+        laps:
+          $ref: "#/components/schemas/AvailabilityStatus"
+        telemetry:
+          $ref: "#/components/schemas/AvailabilityStatus"
+        weather:
+          $ref: "#/components/schemas/AvailabilityStatus"
+        race_control_messages:
+          $ref: "#/components/schemas/AvailabilityStatus"
+    SourceProvenance:
+      type: object
+      additionalProperties: false
+      required: [provider]
+      properties:
+        provider:
+          type: string
+          const: FastF1
+    AnalyticsSessionContext:
+      type: object
+      additionalProperties: false
+      required: [year, event, session, circuit]
+      properties:
+        year:
+          type: integer
+        event:
+          $ref: "#/components/schemas/EventSummary"
+        session:
+          $ref: "#/components/schemas/SessionIdentity"
+        circuit:
+          $ref: "#/components/schemas/CircuitSummary"
+    LapExclusionReason:
+      type: string
+      description: >-
+        Primary exclusion category. invalid_timing means the lap record lacks
+        the minimum valid timing identity required for deterministic pace
+        analysis, including an unusable LapTime or unusable LapNumber.
+        A lap duration below 500,000 ns is unusable, including positive values
+        that would round to 0 ms. Exactly 500,000 ns passes timing validity
+        and publishes as 1 ms; other exclusion rules still apply.
+      enum:
+        - invalid_timing
+        - lap_one_start
+        - pit_in
+        - pit_out
+        - disrupted_status
+        - anomalous_pace
+    DisruptiveTrackStatus:
+      type: string
+      enum:
+        - yellow
+        - safety_car
+        - red_flag
+        - virtual_safety_car
+        - virtual_safety_car_ending
+    RepresentativeRacePacePolicy:
+      type: object
+      additionalProperties: false
+      required:
+        - policy_id
+        - primary_metric
+        - consistency_metric
+        - minimum_representative_laps
+        - anomalous_pace_threshold_percent
+        - anomalous_pace_comparison
+        - anomalous_pace_reference
+        - timing_unit
+        - rounding
+        - ranking_method
+        - tie_basis
+        - tie_display_order
+        - is_accurate_used_for_exclusion
+        - track_conditions_adjusted
+        - exclusion_precedence
+        - disruptive_track_statuses
+      properties:
+        policy_id:
+          type: string
+          const: representative-race-pace-v1
+        primary_metric:
+          type: string
+          const: median
+        consistency_metric:
+          type: string
+          const: population_standard_deviation
+        minimum_representative_laps:
+          type: integer
+          const: 5
+        anomalous_pace_threshold_percent:
+          type: integer
+          const: 120
+          description: >-
+            Driver-relative v1 threshold applied after structural and status
+            exclusions. It is not adjusted for track conditions.
+        anomalous_pace_comparison:
+          type: string
+          const: strictly_greater_than
+        anomalous_pace_reference:
+          type: string
+          const: driver_fastest_after_structural_status_exclusions
+        timing_unit:
+          type: string
+          const: milliseconds
+        rounding:
+          type: string
+          const: half_up
+        ranking_method:
+          type: string
+          const: competition
+        tie_basis:
+          type: string
+          const: published_median_milliseconds
+        tie_display_order:
+          type: string
+          const: driver_number_ascending_numeric
+        is_accurate_used_for_exclusion:
+          type: boolean
+          const: false
+        track_conditions_adjusted:
+          type: boolean
+          const: false
+          description: >-
+            Compound does not directly exclude laps, but the condition-unaware
+            anomaly rule can still exclude a legitimate substantially slower-
+            condition lap.
+        exclusion_precedence:
+          type: array
+          prefixItems:
+            - const: invalid_timing
+            - const: lap_one_start
+            - const: pit_in
+            - const: pit_out
+            - const: disrupted_status
+            - const: anomalous_pace
+          minItems: 6
+          maxItems: 6
+        disruptive_track_statuses:
+          type: array
+          prefixItems:
+            - const: yellow
+            - const: safety_car
+            - const: red_flag
+            - const: virtual_safety_car
+            - const: virtual_safety_car_ending
+          minItems: 5
+          maxItems: 5
+    LapClassification:
+      type: object
+      additionalProperties: false
+      required:
+        - source_order
+        - lap_number
+        - lap_time_ms
+        - classification
+        - primary_exclusion_reason
+        - track_status_codes
+        - disruptive_statuses
+        - is_accurate
+        - compound
+      properties:
+        source_order:
+          type: integer
+          minimum: 1
+        lap_number:
+          type: [integer, "null"]
+          minimum: 1
+        lap_time_ms:
+          type: [integer, "null"]
+          minimum: 1
+          description: >-
+            ROUND_HALF_UP integer milliseconds from a usable source duration
+            of at least 500,000 ns; null for an unusable duration. Exactly
+            500,000 ns publishes as 1 ms. Never clamp a rounded 0 ms to 1 ms.
+        classification:
+          type: string
+          enum: [representative, excluded]
+        primary_exclusion_reason:
+          anyOf:
+            - $ref: "#/components/schemas/LapExclusionReason"
+            - type: "null"
+        track_status_codes:
+          anyOf:
+            - type: array
+              uniqueItems: true
+              items:
+                type: string
+                pattern: "^[0-9]$"
+            - type: "null"
+        disruptive_statuses:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/DisruptiveTrackStatus"
+        is_accurate:
+          type: [boolean, "null"]
+        compound:
+          type: [string, "null"]
+          description: >-
+            Source diagnostic only. Compound is never a direct exclusion
+            criterion; all laps remain subject to the separate anomaly rule.
+    ExclusionCounts:
+      type: object
+      additionalProperties: false
+      required:
+        - invalid_timing
+        - lap_one_start
+        - pit_in
+        - pit_out
+        - disrupted_status
+        - anomalous_pace
+      properties:
+        invalid_timing:
+          type: integer
+          minimum: 0
+        lap_one_start:
+          type: integer
+          minimum: 0
+        pit_in:
+          type: integer
+          minimum: 0
+        pit_out:
+          type: integer
+          minimum: 0
+        disrupted_status:
+          type: integer
+          minimum: 0
+        anomalous_pace:
+          type: integer
+          minimum: 0
+    LapSample:
+      type: object
+      additionalProperties: false
+      required:
+        - source_lap_count
+        - representative_lap_count
+        - excluded_lap_count
+        - exclusions
+      properties:
+        source_lap_count:
+          type: integer
+          minimum: 0
+        representative_lap_count:
+          type: integer
+          minimum: 0
+        excluded_lap_count:
+          type: integer
+          minimum: 0
+        exclusions:
+          $ref: "#/components/schemas/ExclusionCounts"
+    PaceMetrics:
+      type: object
+      description: >-
+        Calculated from unrounded representative durations of at least
+        500,000 ns and published using ROUND_HALF_UP. Median, mean, and fastest
+        are at least 1 ms without clamping. Population standard deviation
+        can legitimately be 0 ms.
+      additionalProperties: false
+      required:
+        - median_lap_time_ms
+        - mean_lap_time_ms
+        - fastest_lap_time_ms
+        - population_standard_deviation_ms
+      properties:
+        median_lap_time_ms:
+          type: integer
+          minimum: 1
+        mean_lap_time_ms:
+          type: integer
+          minimum: 1
+        fastest_lap_time_ms:
+          type: integer
+          minimum: 1
+        population_standard_deviation_ms:
+          type: integer
+          minimum: 0
+    AnalyticsDriverIdentity:
+      type: object
+      additionalProperties: false
+      required: [driver_number, abbreviation, full_name, team_name]
+      properties:
+        driver_number:
+          type: string
+          pattern: "^[1-9][0-9]*$"
+        abbreviation:
+          type: [string, "null"]
+        full_name:
+          type: [string, "null"]
+        team_name:
+          type: [string, "null"]
+    DriverPaceSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - driver
+        - status
+        - policy_id
+        - sample
+        - metrics
+        - rank
+        - tied
+        - delta_to_best_ms
+        - source
+      properties:
+        driver:
+          $ref: "#/components/schemas/AnalyticsDriverIdentity"
+        status:
+          type: string
+          enum: [available, insufficient_data]
+        policy_id:
+          type: string
+          const: representative-race-pace-v1
+        sample:
+          $ref: "#/components/schemas/LapSample"
+        metrics:
+          anyOf:
+            - $ref: "#/components/schemas/PaceMetrics"
+            - type: "null"
+        rank:
+          type: [integer, "null"]
+          minimum: 1
+        tied:
+          type: [boolean, "null"]
+        delta_to_best_ms:
+          type: [integer, "null"]
+          minimum: 0
+        source:
+          $ref: "#/components/schemas/SourceProvenance"
+    SessionPaceAnalysisResponse:
+      type: object
+      additionalProperties: false
+      required: [context, policy, drivers, source]
+      properties:
+        context:
+          $ref: "#/components/schemas/AnalyticsSessionContext"
+        policy:
+          $ref: "#/components/schemas/RepresentativeRacePacePolicy"
+        drivers:
+          type: array
+          items:
+            $ref: "#/components/schemas/DriverPaceSummary"
+        source:
+          $ref: "#/components/schemas/SourceProvenance"
+    DriverPaceAnalysisResponse:
+      type: object
+      additionalProperties: false
+      required: [context, policy, driver, laps, source]
+      properties:
+        context:
+          $ref: "#/components/schemas/AnalyticsSessionContext"
+        policy:
+          $ref: "#/components/schemas/RepresentativeRacePacePolicy"
+        driver:
+          $ref: "#/components/schemas/DriverPaceSummary"
+        laps:
+          type: array
+          items:
+            $ref: "#/components/schemas/LapClassification"
+        source:
+          $ref: "#/components/schemas/SourceProvenance"
+    DriverPaceComparisonResult:
+      type: object
+      additionalProperties: false
+      required: [status, delta_ms, outcome, faster_driver_number]
+      properties:
+        status:
+          type: string
+          enum: [available, insufficient_data]
+        delta_ms:
+          type: [integer, "null"]
+        outcome:
+          anyOf:
+            - type: string
+              enum: [driver_a_faster, driver_b_faster, tied]
+            - type: "null"
+        faster_driver_number:
+          type: [string, "null"]
+          pattern: "^[1-9][0-9]*$"
+    DriverPaceComparisonResponse:
+      type: object
+      additionalProperties: false
+      required: [context, policy, driver_a, driver_b, comparison, source]
+      properties:
+        context:
+          $ref: "#/components/schemas/AnalyticsSessionContext"
+        policy:
+          $ref: "#/components/schemas/RepresentativeRacePacePolicy"
+        driver_a:
+          $ref: "#/components/schemas/DriverPaceSummary"
+        driver_b:
+          $ref: "#/components/schemas/DriverPaceSummary"
+        comparison:
+          $ref: "#/components/schemas/DriverPaceComparisonResult"
+        source:
+          $ref: "#/components/schemas/SourceProvenance"
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+    ValidationError:
+      type: object
+      properties:
+        loc:
+          type: array
+          items:
+            anyOf:
+              - type: string
+              - type: integer
+        msg:
+          type: string
+        type:
+          type: string
+      required: [loc, msg, type]
+    HTTPValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidationError"

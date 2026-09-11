@@ -15,6 +15,166 @@ from app.models import SessionTiming
 CONTROL_SOURCE_IDENTIFIERS = (2025, "Italian Grand Prix", "Race")
 
 
+def test_reusable_loader_returns_the_loaded_snapshot(isolated_loader, monkeypatch):
+    module = isolated_loader.module
+    session = make_session()
+    session.load = Mock()
+    source = Mock(return_value=session)
+    monkeypatch.setattr(module.fastf1, "get_session", source)
+    assert module.load_session(*CONTROL_SOURCE_IDENTIFIERS) is session
+    source.assert_called_once_with(*CONTROL_SOURCE_IDENTIFIERS)
+    session.load.assert_called_once_with(
+        laps=True, telemetry=False, weather=False, messages=False
+    )
+
+
+def test_summary_wrapper_loads_and_maps_once(monkeypatch):
+    import app.f1_data as module
+
+    snapshot = object()
+    loader = Mock(return_value=snapshot)
+    mapper = Mock(return_value=object())
+    monkeypatch.setattr(module, "load_session", loader)
+    monkeypatch.setattr(module, "map_session_summary", mapper)
+    assert (
+        module.load_session_summary(*CONTROL_SOURCE_IDENTIFIERS) is mapper.return_value
+    )
+    loader.assert_called_once_with(*CONTROL_SOURCE_IDENTIFIERS)
+    mapper.assert_called_once_with(snapshot)
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (pd.NaT, None),
+        (None, None),
+        (float("nan"), None),
+        (float("inf"), None),
+        ("bad", None),
+        (0, None),
+        *[
+            (pd.Timedelta(ns, unit="ns"), ns if ns >= 500_000 else None)
+            for ns in (0, -1, 1, 499_999, 500_000, 500_001, 90_000_000_123)
+        ],
+    ],
+)
+def test_normalize_lap_duration_boundary(pace_session_factory, value, expected):
+    from app.f1_data import map_lap_inputs
+
+    session = pace_session_factory()
+    session.laps["LapTime"] = session.laps["LapTime"].astype(object)
+    session.laps.at[0, "LapTime"] = value
+    mapped = map_lap_inputs(session)
+    assert mapped.laps[0].lap_time_ns == expected
+    assert len(mapped.laps) == len(session.laps)
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, None),
+        (np.nan, None),
+        (np.inf, None),
+        (-1, None),
+        (0, None),
+        (1.5, None),
+        ("bad", None),
+        (True, None),
+        (2.0, 2),
+    ],
+)
+def test_normalize_lap_number(pace_session_factory, value, expected):
+    from app.f1_data import map_lap_inputs
+
+    session = pace_session_factory()
+    session.laps["LapNumber"] = session.laps["LapNumber"].astype(object)
+    session.laps.at[0, "LapNumber"] = value
+    assert map_lap_inputs(session).laps[0].lap_number == expected
+
+
+def test_normalize_source_diagnostics_and_order(pace_session_factory):
+    from app.f1_data import map_lap_inputs
+
+    session = pace_session_factory()
+    session.laps.at[0, "TrackStatus"] = "72422713"
+    session.laps.at[0, "PitInTime"] = pd.Timedelta(0, unit="ns")
+    session.laps.at[0, "PitOutTime"] = pd.Timedelta(2, unit="s")
+    session.laps.at[0, "IsAccurate"] = False
+    session.laps.at[0, "Compound"] = "WET"
+    session.laps.index = [99] * len(session.laps)
+    mapped = map_lap_inputs(session)
+    lap = mapped.laps[0]
+    assert lap.track_status_codes == ("7", "2", "4", "1", "3")
+    assert lap.pit_in and lap.pit_out
+    assert lap.is_accurate is False and lap.compound == "WET"
+    assert [lap.source_order for lap in mapped.laps] == list(range(1, 13))
+    assert [driver.driver_number for driver in mapped.participants] == ["1", "4", "27"]
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [(None, None), ("", None), ("3", ("3",)), ("9", ("9",)), ("121", ("1", "2"))],
+)
+def test_normalize_status_absence_and_unknown(pace_session_factory, value, expected):
+    from app.f1_data import map_lap_inputs
+
+    session = pace_session_factory()
+    session.laps.at[0, "TrackStatus"] = value
+    session.laps = session.laps.drop(columns=["IsAccurate", "Compound"])
+    lap = map_lap_inputs(session).laps[0]
+    assert lap.track_status_codes == expected
+    assert lap.is_accurate is None and lap.compound is None
+
+
+@pytest.mark.parametrize(
+    "column",
+    ["DriverNumber", "LapNumber", "LapTime", "PitInTime", "PitOutTime", "TrackStatus"],
+)
+def test_normalize_rejects_missing_required_columns(pace_session_factory, column):
+    from app.f1_data import DataSourceUnavailableError, map_lap_inputs
+
+    session = pace_session_factory()
+    session.laps = session.laps.drop(columns=column)
+    with pytest.raises(DataSourceUnavailableError):
+        map_lap_inputs(session)
+
+
+@pytest.mark.parametrize("column", ["LapNumber", "TrackStatus"])
+def test_normalize_rejects_duplicate_required_columns(pace_session_factory, column):
+    from app.f1_data import DataSourceUnavailableError, map_lap_inputs
+
+    session = pace_session_factory()
+    session.laps = pd.concat([session.laps, session.laps[[column]]], axis=1)
+    with pytest.raises(DataSourceUnavailableError, match="column"):
+        map_lap_inputs(session)
+
+
+@pytest.mark.parametrize("numbers", [["1", "1"], ["01"], ["0"], ["VER"], [None]])
+def test_normalize_rejects_invalid_roster(pace_session_factory, numbers):
+    from app.f1_data import DataSourceUnavailableError, map_lap_inputs
+
+    session = pace_session_factory(results=pd.DataFrame({"DriverNumber": numbers}))
+    with pytest.raises(DataSourceUnavailableError):
+        map_lap_inputs(session)
+
+
+@pytest.mark.parametrize("failure", ["missing", "empty", "unattributed", "no-timing"])
+def test_normalize_rejects_unusable_dataset(pace_session_factory, failure):
+    from app.f1_data import DataSourceUnavailableError, map_lap_inputs
+
+    session = pace_session_factory()
+    if failure == "missing":
+        session.laps = None
+    elif failure == "empty":
+        session.laps = session.laps.iloc[:0]
+    elif failure == "unattributed":
+        session.laps.at[0, "DriverNumber"] = "999"
+    else:
+        session.laps["LapTime"] = pd.NaT
+    with pytest.raises(DataSourceUnavailableError):
+        map_lap_inputs(session)
+
+
 def test_routine_tests_block_uncontrolled_fastf1_session_access() -> None:
     with pytest.raises(
         AssertionError,

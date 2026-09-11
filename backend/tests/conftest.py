@@ -1,10 +1,67 @@
 from collections.abc import Generator
+from types import SimpleNamespace
 
 import fastf1
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+
+
+@pytest.fixture
+def pace_session_factory():
+    """Build provider-shaped data without loading FastF1 or touching its cache."""
+
+    def make_session(*, laps=None, results=None):
+        if results is None:
+            results = pd.DataFrame(
+                [
+                    {"DriverNumber": number, "Position": position}
+                    for position, number in enumerate(("1", "4", "27"), 1)
+                ]
+            )
+        if laps is None:
+            laps = pd.DataFrame(
+                [
+                    {
+                        "DriverNumber": number,
+                        "LapNumber": float(lap),
+                        "LapTime": pd.Timedelta(seconds * 1_000_000_000, unit="ns"),
+                        "PitInTime": pd.NaT,
+                        "PitOutTime": pd.NaT,
+                        "TrackStatus": "1",
+                        "IsAccurate": True,
+                        "Compound": "MEDIUM",
+                    }
+                    for number, seconds in (("1", 90), ("4", 91))
+                    for lap in range(1, 7)
+                ]
+            )
+            for column in ("PitInTime", "PitOutTime"):
+                laps[column] = pd.Series(
+                    pd.NaT, index=laps.index, dtype="timedelta64[ns]"
+                )
+        event = pd.Series(
+            {
+                "EventName": "Italian Grand Prix",
+                "Location": "Monza",
+                "Country": "Italy",
+                "RoundNumber": 16,
+            }
+        )
+        event.year = 2025
+        return SimpleNamespace(
+            event=event,
+            name="Race",
+            results=results,
+            laps=laps,
+            date=pd.Timestamp("2025-09-07 13:00:00"),
+            session_info={},
+            total_laps=53,
+        )
+
+    return make_session
 
 
 @pytest.fixture(autouse=True)

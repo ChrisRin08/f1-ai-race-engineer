@@ -5,7 +5,7 @@
 F1 AI Race Engineer is a monorepo with separate frontend, backend, and documentation areas:
 
 - `frontend/` will contain the Next.js web application.
-- `backend/` will contain Python services, deterministic analytics, and the FastAPI application.
+- `backend/` contains Python services, deterministic analytics, and the FastAPI application.
 - `docs/` contains product and architecture documentation.
 
 The product analyzes real Formula 1 data, computes trusted race analytics in Python, and presents the results in a dashboard. Later AI features will explain and orchestrate those trusted calculations instead of replacing them.
@@ -60,7 +60,21 @@ The initial contract uses `GET /api/v1/seasons/{year}/events/{event}/sessions/{s
 
 ## Initial Analytics Slice
 
-The intended first analytics slice for Demo v0.1 includes:
+Feature `002-lap-pace-analytics` implements overall representative race pace through three nested resources: session `/pace`, driver `/pace/drivers/{driver_number}`, and ordered comparison `/pace/drivers/{driver_a}/comparisons/{driver_b}`.
+
+Each operation follows one shared data flow:
+
+```text
+FastAPI -> pace_service.py -> f1_data.load_session (once)
+  -> f1_data normalization -> lap_analytics.analyze_session_field (once)
+  -> service projection -> pace_models strict response -> JSON
+```
+
+`f1_data.py` owns FastF1/Pandas adaptation, disk caching, and expected source errors. `lap_analytics.py` consumes immutable application-owned inputs using only deterministic standard-library Python. `pace_service.py` reuses the complete field result for all projections, including each driver's delta-to-best. `pace_models.py` owns response validation; routes do not calculate pace. No cross-request cache is added.
+
+Policy `representative-race-pace-v1` uses median representative lap time, at least five laps, half-up millisecond publication, and published-median competition ranking. IsAccurate and Compound do not directly exclude laps. Its driver-relative 120% anomaly rule is intentionally condition-unaware and can exclude legitimate slower-condition laps; condition/stint-aware policies are deferred. See the [policy and contracts](../specs/002-lap-pace-analytics/data-model.md) for exclusion precedence and explicit insufficient-data semantics.
+
+The broader intended analytics slice for Demo v0.1 includes the following; compound/stint analysis and pit-stop timing views are not implemented by feature 002:
 
 - Lap times
 - Fastest lap

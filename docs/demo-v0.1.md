@@ -20,7 +20,9 @@ The initial validation dataset is the 2025 Italian Grand Prix at Monza, Race ses
 
 ## Included Scope
 
-Demo v0.1 includes:
+Current backend capability: health, session summary, deterministic representative lap evidence, overall pace ranking, and directional driver comparison for the Monza control race. Feature 002 uses median pace, a five-lap minimum, published-millisecond ties/ranks/deltas, and explicit exclusion counts. Its condition-unaware 120% anomaly heuristic is not condition-, stint-, fuel-, or traffic-adjusted. The frontend and the broader analytics below remain demo targets, not delivered functionality.
+
+Demo v0.1 targets:
 
 - A Next.js frontend dashboard.
 - A FastAPI backend.
@@ -55,7 +57,7 @@ The following are explicitly out of scope for Demo v0.1 unless the plan changes:
 - LLM-generated strategy calculations
 - Cache eviction, Docker volumes, or production cache infrastructure
 - CI/CD workflow creation
-- Additional API routes beyond the initial control-session contract
+- Dynamic session coverage and analytics beyond the approved lap/overall-pace resources
 
 ## Acceptance Criteria
 

@@ -1,7 +1,10 @@
+import re
 import sqlite3
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import cache
+from math import isfinite
+from numbers import Real
 from pathlib import Path
 
 import fastf1
@@ -9,6 +12,12 @@ import pandas as pd
 from fastf1.core import Session
 from fastf1.exceptions import DataNotLoadedError, RateLimitExceededError
 
+from app.lap_analytics import (
+    MINIMUM_LAP_TIME_NS,
+    DriverIdentity,
+    SessionFieldInput,
+    SourceLap,
+)
 from app.models import (
     AvailabilityStatus,
     CircuitSummary,
@@ -39,6 +48,11 @@ def load_session_summary(
     event_name: str,
     session_name: str,
 ) -> SessionSummary:
+    return map_session_summary(load_session(year, event_name, session_name))
+
+
+def load_session(year: int, event_name: str, session_name: str) -> Session:
+    """Load one source snapshot with shared cache and expected-error handling."""
     try:
         _configure_fastf1_cache()
     except (OSError, sqlite3.Error) as exc:
@@ -73,7 +87,7 @@ def load_session_summary(
             "Formula 1 session data is unavailable."
         ) from exc
 
-    return map_session_summary(session)
+    return session
 
 
 def map_session_summary(session: Session) -> SessionSummary:
@@ -120,6 +134,105 @@ def map_session_summary(session: Session) -> SessionSummary:
         ),
         source=SourceProvenance(provider="FastF1"),
     )
+
+
+def map_lap_inputs(session: Session) -> SessionFieldInput:
+    """Normalize one snapshot without dropping rows or inventing timing facts."""
+    results = _required_results(session)
+    participants = []
+    numbers = set()
+    for _, row in results.iterrows():
+        number = _canonical_driver_number(row.get("DriverNumber"))
+        if number in numbers:
+            raise DataSourceUnavailableError("Duplicate result driver number.")
+        numbers.add(number)
+        participants.append(
+            DriverIdentity(
+                number,
+                _optional_text(row.get("Abbreviation")),
+                _optional_text(row.get("FullName")),
+                _optional_text(row.get("TeamName")),
+            )
+        )
+
+    table = _optional_loaded_value(session, "laps")
+    required = {
+        "DriverNumber",
+        "LapNumber",
+        "LapTime",
+        "PitInTime",
+        "PitOutTime",
+        "TrackStatus",
+    }
+    if not isinstance(table, pd.DataFrame) or table.empty:
+        raise DataSourceUnavailableError("Required session laps are unavailable.")
+    if not required.issubset(table.columns):
+        raise DataSourceUnavailableError("Required lap columns are unavailable.")
+    duplicated_required = required.intersection(
+        table.columns[table.columns.duplicated()].tolist()
+    )
+    if duplicated_required:
+        raise DataSourceUnavailableError("Required lap columns are ambiguous.")
+
+    laps = []
+    for source_order, (_, row) in enumerate(table.iterrows(), 1):
+        number = _canonical_driver_number(row["DriverNumber"])
+        if number not in numbers:
+            raise DataSourceUnavailableError("Lap has no matching participant.")
+        accurate = _normalize_missing(row.get("IsAccurate"))
+        laps.append(
+            SourceLap(
+                source_order=source_order,
+                driver_number=number,
+                lap_number=_lap_number(row["LapNumber"]),
+                lap_time_ns=_lap_duration_ns(row["LapTime"]),
+                pit_in=not bool(pd.isna(row["PitInTime"])),
+                pit_out=not bool(pd.isna(row["PitOutTime"])),
+                track_status_codes=_track_status_codes(row["TrackStatus"]),
+                is_accurate=accurate if isinstance(accurate, bool) else None,
+                compound=_optional_text(row.get("Compound")),
+            )
+        )
+    if not any(
+        lap.lap_number is not None and lap.lap_time_ns is not None for lap in laps
+    ):
+        raise DataSourceUnavailableError("No usable participant-linked lap timing.")
+    return SessionFieldInput(tuple(participants), tuple(laps))
+
+
+def _canonical_driver_number(value: object) -> str:
+    value = _normalize_missing(value)
+    if not isinstance(value, str) or re.fullmatch(r"[1-9][0-9]*", value) is None:
+        raise DataSourceUnavailableError("Invalid source driver number.")
+    return value
+
+
+def _lap_duration_ns(value: object) -> int | None:
+    if not isinstance(value, (pd.Timedelta, timedelta)) or pd.isna(value):
+        return None
+    try:
+        nanoseconds = pd.Timedelta(value).value
+    except (ValueError, OverflowError):
+        return None
+    return nanoseconds if nanoseconds >= MINIMUM_LAP_TIME_NS else None
+
+
+def _lap_number(value: object) -> int | None:
+    value = _normalize_missing(value)
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    if not isfinite(value) or value <= 0 or int(value) != value:
+        return None
+    return int(value)
+
+
+def _track_status_codes(value: object) -> tuple[str, ...] | None:
+    text = _optional_text(value)
+    if text is None:
+        return None
+    if re.fullmatch(r"[0-9]+", text) is None:
+        raise DataSourceUnavailableError("Malformed source track status.")
+    return tuple(dict.fromkeys(text))
 
 
 def _normalize_missing(value: object) -> object | None:
