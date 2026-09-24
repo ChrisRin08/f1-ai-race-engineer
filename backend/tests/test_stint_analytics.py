@@ -32,11 +32,8 @@ def assert_reconciled(driver, rows):
         map(id, driver.laps)
     )
     assert driver.unassigned_lap_count == len(unassigned)
-    assert len(driver.laps) == sum(
-        s.sample.total_lap_count for s in driver.stints
-    ) + len(unassigned)
+    assert len(driver.laps) == sum(len(s.laps) for s in driver.stints) + len(unassigned)
     for stint in driver.stints:
-        assert stint.sample.total_lap_count == len(stint.laps)
         assert all(e.reported_stint == stint.reported_stint for e in stint.laps)
 
 
@@ -49,7 +46,7 @@ def test_reported_identity_is_not_split_merged_or_renumbered():
     )
     (driver,) = construct(rows[::-1]).drivers
     assert [s.reported_stint for s in driver.stints] == [9, 3]
-    assert [s.sample.total_lap_count for s in driver.stints] == [3, 1]
+    assert [len(s.laps) for s in driver.stints] == [3, 1]
     assert all(s.metadata_reason is None for s in driver.stints)
     assert_reconciled(driver, rows)
 
@@ -218,8 +215,7 @@ def test_duplicate_identity_retains_every_assignment_and_blocks_each_stint(ids):
     assert {s.reported_stint for s in driver.stints} == set(ids) - {None}
     for stint in driver.stints:
         assert stint.metadata_reason == "inconsistent_stint_metadata"
-        assert stint.metadata_valid_laps == ()
-        assert stint.sample.total_lap_count == ids.count(stint.reported_stint)
+        assert len(stint.laps) == ids.count(stint.reported_stint)
     assert driver.unassigned_lap_count == ids.count(None)
     assert_reconciled(driver, rows)
 
@@ -230,8 +226,7 @@ def test_identical_duplicate_multiplicity_and_whole_stint_block():
     (driver,) = construct(rows).drivers
     (stint,) = driver.stints
     assert stint.metadata_reason == "inconsistent_stint_metadata"
-    assert stint.metadata_valid_laps == ()
-    assert stint.sample.total_lap_count == 5
+    assert len(stint.laps) == 5
     assert driver.laps[1] == driver.laps[2] == driver.laps[3]
     assert_reconciled(driver, rows)
 
@@ -256,7 +251,7 @@ def test_duplicate_permutations_and_source_positions_have_identical_content(iden
         assert actual == expected
         assert_reconciled(actual.drivers[0], repositioned)
     assert all(
-        s.metadata_valid_laps == ()
+        s.metadata_reason == "inconsistent_stint_metadata"
         for s in expected.drivers[0].stints
         if s.reported_stint != 9
     )

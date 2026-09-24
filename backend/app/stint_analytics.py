@@ -177,13 +177,6 @@ class PositiveIntegerRange:
 
 
 @dataclass(frozen=True)
-class StintConstructionSample:
-    """Assigned row count; eligible/excluded counts require the later rules."""
-
-    total_lap_count: int
-
-
-@dataclass(frozen=True)
 class ConstructedStint:
     driver_number: str
     reported_stint: int
@@ -192,13 +185,7 @@ class ConstructedStint:
     compound_keys: tuple[str, ...]
     lap_range: PositiveIntegerRange | None
     reported_tire_age_range: PositiveIntegerRange | None
-    sample: StintConstructionSample
     metadata_reason: StintMetadataReason | None
-
-    @property
-    def metadata_valid_laps(self) -> tuple[StintConstructionLap, ...]:
-        """Metadata gate for subsequent age/estimator work, not an eligible sample."""
-        return self.laps if self.metadata_reason is None else ()
 
 
 @dataclass(frozen=True)
@@ -269,7 +256,6 @@ def _construct_stint(
         compound_keys=keys,
         lap_range=_range(tuple(e.lap.lap_number for e in laps)),
         reported_tire_age_range=_range(tuple(e.lap.tyre_life for e in laps)),
-        sample=StintConstructionSample(len(laps)),
         metadata_reason=(
             StintMetadataReason.INCONSISTENT_STINT_METADATA
             if inconsistent or len(keys) > 1
