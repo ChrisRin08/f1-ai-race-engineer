@@ -83,14 +83,15 @@ specs/003-tire-stint-analytics/
 ├── research.md
 ├── data-model.md
 ├── quickstart.md
+├── tasks.md
 ├── contracts/
 │   └── openapi.yaml
 └── checklists/
     └── requirements.md
 ```
 
-`tasks.md` is intentionally absent; it belongs to the later `$speckit-tasks`
-stage.
+`tasks.md` records the generated implementation and verification tasks; T001
+through T043 are complete at this documentation checkpoint.
 
 ### Source Code (repository root)
 
@@ -100,8 +101,8 @@ backend/
 │   ├── f1_data.py             # Extend the existing normalized lap mapping
 │   ├── lap_analytics.py       # Extract shared structural/status classification
 │   ├── main.py                # Add two thin, additive routes
-│   ├── models.py              # Reuse unchanged shared contracts
-│   ├── pace_models.py         # Reuse selected types; keep Feature 002 unchanged
+│   ├── models.py              # Reuse schemas; strictly validate shared round number
+│   ├── pace_models.py         # Reuse types; strictly validate shared context year
 │   ├── pace_service.py        # Preserve unchanged Feature 002 orchestration
 │   ├── stint_analytics.py     # New pure construction, policy, and trend logic
 │   ├── stint_models.py        # New strict Feature 003 public contracts
@@ -160,9 +161,11 @@ Append these nullable fields with `None` defaults to the existing immutable
 |---|---|---|---|
 | `stint` | `Laps["Stint"]` (`float64` in FastF1 3.8.3) | `int \| None` | Finite, positive, integral, non-boolean values become Python `int`; missing or malformed scalars become `None` and therefore unassigned evidence |
 | `tyre_life` | `Laps["TyreLife"]` (`float64`) | `int \| None` | Finite, positive, integral, non-boolean values become Python `int`; missing or malformed values become `None` and receive the lap-level unusable-age reason |
-| `provider_generated` | `Laps["FastF1Generated"]` (`bool`) | `bool \| None` | Only normalized booleans are retained; missing or malformed values become `None` and are neutral |
+| `provider_generated` | `Laps["FastF1Generated"]` (NumPy boolean in the verified FastF1 snapshot) | `bool \| None` | Provider booleans become Python `bool`; missing or malformed values become `None` and are neutral |
 
 `is_accurate: bool | None` and `compound: str | None` already exist and remain.
+The verified FastF1 snapshot likewise supplies `IsAccurate` as a NumPy boolean,
+which normalization converts to Python `bool`.
 Compound is trimmed and case-preserved in `f1_data.py`; policy matching happens
 in pure analytics with an uppercase comparison key. The new source columns are
 optional: absence does not make Feature 001/002 unavailable. Duplicate labels
@@ -287,11 +290,10 @@ rounded negative zero to `0.0`. JSON need not render trailing zeroes; the
 contract is numeric millisecond resolution. Calculations use the unrounded
 source sample and unrounded fitted line.
 
-Because application code directly imports SciPy, add `scipy>=1.11,<2` to
-`backend/pyproject.toml` and regenerate `backend/uv.lock` during implementation.
-The current lock already contains SciPy 1.18.1 through FastF1, so the expected
-lock change is root-package dependency metadata rather than a package upgrade.
-Any resolver drift must be reviewed rather than accepted silently.
+Because application code directly imports SciPy, `backend/pyproject.toml`
+declares `scipy>=1.11,<2` and the reviewed lockfile records it as a direct root
+dependency. SciPy 1.18.1 remains the resolved package; unrelated resolver drift
+is not accepted.
 
 ## Compound and Availability Policy
 
@@ -406,7 +408,7 @@ Routine tests remain offline under the existing autouse FastF1 guard.
   invariants. Do not assert an external degradation number.
 - Run the complete existing Feature 001/002 suite as the regression gate.
 
-## Implementation Sequencing for Later Task Generation
+## Implemented Sequence
 
 1. Normalized source extensions and focused provider-adapter tests.
 2. Shared structural/status classifier extraction and Feature 002 regression
@@ -420,24 +422,24 @@ Routine tests remain offline under the existing autouse FastF1 guard.
 7. Gated FastF1 acceptance, complete offline regression verification, and
    narrow README/architecture/demo documentation updates.
 
-These are implementation groups for a later `$speckit-tasks` run; this plan does
-not create or execute tasks.
+These groups were expanded into `tasks.md` and implemented in that dependency
+order.
 
 ## Dependency and Contract Audit
 
-| File or boundary | Planned change |
+| File or boundary | Implemented change |
 |---|---|
-| `backend/pyproject.toml` | Add direct `scipy>=1.11,<2` production dependency |
-| `backend/uv.lock` | Regenerate and review root dependency metadata; expect SciPy 1.18.1 to remain |
-| `backend/app/f1_data.py` | Map three additional nullable fields; do not change source loading flags |
-| `backend/app/lap_analytics.py` | Extract shared five-rule function; append defaulted source fields; preserve all Feature 002 outputs |
-| `backend/app/models.py` | No change |
-| `backend/app/pace_models.py` | No change |
+| `backend/pyproject.toml` | Declares direct `scipy>=1.11,<2` production dependency |
+| `backend/uv.lock` | Records reviewed root dependency metadata with SciPy 1.18.1 retained |
+| `backend/app/f1_data.py` | Maps three additional nullable fields without changing source loading flags |
+| `backend/app/lap_analytics.py` | Extracts the shared five-rule function and appends defaulted source fields while preserving Feature 002 outputs |
+| `backend/app/models.py` | Keeps the public schema and meaning; strictly validates `EventSummary.round_number` as a runtime integer |
+| `backend/app/pace_models.py` | Reuses Feature 002 types and strictly validates `AnalyticsSessionContext.year` as a runtime integer; other Feature 002 behavior is unchanged |
 | `backend/app/pace_service.py` | No change |
-| `backend/app/main.py` | Add two routes with existing error/session validation behavior |
+| `backend/app/main.py` | Adds two routes with existing error/session validation behavior |
 | Feature 001/002 OpenAPI artifacts | No change |
-| Feature 003 OpenAPI | New complete additive contract in `contracts/openapi.yaml` |
-| Documentation | Update README, architecture, and demo scope only after behavior is verified |
+| Feature 003 OpenAPI | Complete additive contract in `contracts/openapi.yaml` |
+| Documentation | README, architecture, demo, and validation artifacts synchronized after verified behavior |
 
 ### Exact implementation file inventory
 
@@ -455,6 +457,8 @@ Existing files to modify:
 - `backend/app/f1_data.py`
 - `backend/app/lap_analytics.py`
 - `backend/app/main.py`
+- `backend/app/models.py`
+- `backend/app/pace_models.py`
 - `backend/tests/conftest.py`
 - `backend/tests/test_f1_data.py`
 - `backend/tests/test_lap_analytics.py`
@@ -468,8 +472,6 @@ Existing files to modify:
 
 Explicitly unchanged files and artifacts:
 
-- `backend/app/models.py`
-- `backend/app/pace_models.py`
 - `backend/app/pace_service.py`
 - `backend/tests/test_health.py`
 - `backend/tests/test_sessions.py`
@@ -498,9 +500,9 @@ Explicitly unchanged files and artifacts:
 - A response must not call the metric simply `degradation`, imply causality, or
   omit its limitations. Existing Feature 002 pace remains condition-unaware and
   unchanged.
-- No unresolved product or architecture decision remains before
-  `$speckit-tasks`. Implementation must review any unexpected lockfile resolver
-  drift before proceeding.
+- No unresolved product or architecture decision remained when tasks were
+  generated. Final repository review still rejects unexpected lockfile resolver
+  drift.
 
 ## Complexity Tracking
 

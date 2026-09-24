@@ -2,7 +2,7 @@
 
 ## Goal
 
-Demo v0.1 targets a working vertical slice by September 6:
+Demo v0.1 targets a working vertical slice:
 
 ```text
 real F1 data -> deterministic Python analytics -> FastAPI -> frontend dashboard
@@ -20,7 +20,7 @@ The initial validation dataset is the 2025 Italian Grand Prix at Monza, Race ses
 
 ## Included Scope
 
-Current backend capability: health, session summary, deterministic representative lap evidence, overall pace ranking, and directional driver comparison for the Monza control race. Feature 002 uses median pace, a five-lap minimum, published-millisecond ties/ranks/deltas, and explicit exclusion counts. Its condition-unaware 120% anomaly heuristic is not condition-, stint-, fuel-, or traffic-adjusted. The frontend and the broader analytics below remain demo targets, not delivered functionality.
+Current backend capability: health, session summary, deterministic representative lap evidence, overall pace ranking, directional driver comparison, and observed tire-stint analytics for the Monza control race. Feature 002 uses median pace, a five-lap minimum, published-millisecond ties/ranks/deltas, and explicit exclusion counts. Its condition-unaware 120% anomaly heuristic is separate from Feature 003, which uses reported stint and tire-age facts, requires six eligible distinct ages, and publishes an observational Theil-Sen trend where available. The frontend and the remaining broader analytics below remain demo targets, not delivered functionality.
 
 Demo v0.1 targets:
 
@@ -57,7 +57,59 @@ The following are explicitly out of scope for Demo v0.1 unless the plan changes:
 - LLM-generated strategy calculations
 - Cache eviction, Docker volumes, or production cache infrastructure
 - CI/CD workflow creation
-- Dynamic session coverage and analytics beyond the approved lap/overall-pace resources
+- Dynamic session coverage and analytics beyond the approved session, pace, and tire-stint resources
+
+## Feature 003 Demonstration Flow
+
+Start the API from the repository root:
+
+```bash
+cd backend
+uv run --frozen --no-sync uvicorn app.main:app --reload
+```
+
+Request the compact session view:
+
+```bash
+curl --fail --silent \
+  http://127.0.0.1:8000/api/v1/seasons/2025/events/italian-grand-prix/sessions/race/tire-stints
+```
+
+The response keeps every authoritative participant in numeric driver-number
+order and shows each reported stint's compound, ranges, reconciled sample,
+status, and optional metrics. It does not duplicate lap evidence. If the loaded
+provider snapshot contains an `available` stint, inspect its
+`observed_pace_trend_seconds_per_lap` and
+`median_absolute_residual_seconds`. If it contains an `unavailable` stint,
+inspect its `unavailability_reason` and confirm both metrics are null. The demo
+does not depend on a particular driver or outcome because FastF1 can correct
+historical data.
+
+Choose a canonical `driver_number` returned by the session response, export it
+as `DRIVER_NUMBER`, and request the audit resource:
+
+```bash
+curl --fail --silent \
+  "http://127.0.0.1:8000/api/v1/seasons/2025/events/italian-grand-prix/sessions/race/tire-stints/drivers/${DRIVER_NUMBER}"
+```
+
+Driver detail repeats the same stint summaries and adds one evidence record for
+every normalized source lap. Use `disposition`, `primary_exclusion_reason`, and
+`unassigned_reason` to explain why each row did or did not enter an estimator
+sample. The sample totals, detailed exclusion counts, and unassigned count must
+reconcile with that evidence.
+
+Interpret the trend as observed direction within one stint:
+
+- positive: lap times tended to increase as reported tire age increased;
+- negative: lap times tended to decrease as reported tire age increased;
+- zero: no directional change remains after publication rounding.
+
+None of these values alone proves physical tire degradation. The response
+explicitly identifies an `observational_association`, sets
+`isolated_physical_tire_wear` to false, and lists fuel load or burn, traffic,
+track evolution, driver tire management, changing environmental conditions,
+and other unmodeled race effects as unadjusted factors.
 
 ## Acceptance Criteria
 

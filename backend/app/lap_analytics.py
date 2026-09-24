@@ -29,6 +29,13 @@ class DisruptiveTrackStatus(StrEnum):
 
 DISRUPTIVE_STATUS_CODES = tuple(zip(("2", "4", "5", "6", "7"), DisruptiveTrackStatus))
 EXCLUSION_PRECEDENCE = tuple(LapExclusionReason)
+STRUCTURAL_STATUS_EXCLUSION_PRECEDENCE = (
+    LapExclusionReason.INVALID_TIMING,
+    LapExclusionReason.LAP_ONE_START,
+    LapExclusionReason.PIT_IN,
+    LapExclusionReason.PIT_OUT,
+    LapExclusionReason.DISRUPTED_STATUS,
+)
 
 
 @dataclass(frozen=True)
@@ -75,6 +82,9 @@ class SourceLap:
     track_status_codes: tuple[str, ...] | None = None
     is_accurate: bool | None = None
     compound: str | None = None
+    stint: int | None = None
+    tyre_life: int | None = None
+    provider_generated: bool | None = None
 
     def __post_init__(self) -> None:
         if self.lap_time_ns is not None and (
@@ -85,6 +95,14 @@ class SourceLap:
             type(self.lap_number) is not int or self.lap_number <= 0
         ):
             raise ValueError("SourceLap requires normalized lap number or None.")
+        for value in (self.stint, self.tyre_life):
+            if value is not None and (type(value) is not int or value <= 0):
+                raise ValueError("SourceLap requires normalized tire metadata or None.")
+        if (
+            self.provider_generated is not None
+            and type(self.provider_generated) is not bool
+        ):
+            raise ValueError("SourceLap requires normalized generated boolean or None.")
 
 
 @dataclass(frozen=True)
@@ -100,8 +118,10 @@ class ClassifiedLap:
     disruptive_statuses: tuple[DisruptiveTrackStatus, ...]
 
 
-def classify_driver_laps(laps: tuple[SourceLap, ...]) -> tuple[ClassifiedLap, ...]:
-    """Classify every row once; Compound and IsAccurate never cause exclusion."""
+def classify_structural_status_laps(
+    laps: tuple[SourceLap, ...],
+) -> tuple[ClassifiedLap, ...]:
+    """Apply only the five structural/status rules, preserving input row order."""
     structural = []
     for lap in laps:
         disruptions = tuple(
@@ -121,6 +141,12 @@ def classify_driver_laps(laps: tuple[SourceLap, ...]) -> tuple[ClassifiedLap, ..
         elif disruptions:
             reason = LapExclusionReason.DISRUPTED_STATUS
         structural.append(ClassifiedLap(lap, reason, disruptions))
+    return tuple(structural)
+
+
+def classify_driver_laps(laps: tuple[SourceLap, ...]) -> tuple[ClassifiedLap, ...]:
+    """Classify every row once; Compound and IsAccurate never cause exclusion."""
+    structural = classify_structural_status_laps(laps)
     eligible = [
         decision.lap.lap_time_ns
         for decision in structural

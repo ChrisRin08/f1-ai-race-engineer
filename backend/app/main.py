@@ -17,6 +17,11 @@ from app.pace_service import (
     load_pace_comparison,
     load_session_pace,
 )
+from app.stint_models import (
+    DriverTireStintAnalysisResponse,
+    SessionTireStintAnalysisResponse,
+)
+from app.stint_service import load_driver_tire_stints, load_session_tire_stints
 
 app = FastAPI(title="F1 AI Race Engineer Backend", version="0.1.0")
 
@@ -152,6 +157,70 @@ def get_session_pace(
         )
     try:
         return load_session_pace(*source_identifiers)
+    except DataSourceUnavailableError:
+        return _error_response(
+            status_code=503,
+            code="data_source_unavailable",
+            message="Formula 1 session data is currently unavailable.",
+        )
+
+
+@app.get(
+    "/api/v1/seasons/{year}/events/{event}/sessions/{session}"
+    "/tire-stints/drivers/{driver_number}",
+    response_model=DriverTireStintAnalysisResponse,
+    operation_id="getDriverTireStintAnalysis",
+    responses={404: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+)
+def get_driver_tire_stints(
+    year: Annotated[int, Path(ge=1950)],
+    event: Annotated[str, Path(pattern=_SESSION_SLUG_PATTERN)],
+    session: Annotated[str, Path(pattern=_SESSION_SLUG_PATTERN)],
+    driver_number: Annotated[str, Path(pattern=DRIVER_NUMBER_PATTERN)],
+) -> DriverTireStintAnalysisResponse | JSONResponse:
+    source_identifiers = _SUPPORTED_SESSIONS.get((year, event, session))
+    if source_identifiers is None:
+        return _error_response(
+            status_code=404,
+            code="session_not_supported",
+            message="The requested session is not supported.",
+        )
+    try:
+        return load_driver_tire_stints(*source_identifiers, driver_number)
+    except DriverNotFoundError:
+        return _error_response(
+            status_code=404,
+            code="driver_not_found",
+            message="The requested driver is not in the session results.",
+        )
+    except DataSourceUnavailableError:
+        return _error_response(
+            status_code=503,
+            code="data_source_unavailable",
+            message="Formula 1 session data is currently unavailable.",
+        )
+
+
+@app.get(
+    "/api/v1/seasons/{year}/events/{event}/sessions/{session}/tire-stints",
+    response_model=SessionTireStintAnalysisResponse,
+    operation_id="getSessionTireStintAnalysis",
+    responses={404: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+)
+def get_session_tire_stints(
+    year: Annotated[int, Path(ge=1950)],
+    event: Annotated[str, Path(pattern=_SESSION_SLUG_PATTERN)],
+    session: Annotated[str, Path(pattern=_SESSION_SLUG_PATTERN)],
+) -> SessionTireStintAnalysisResponse | JSONResponse:
+    source_identifiers = _SUPPORTED_SESSIONS.get((year, event, session))
+    if source_identifiers is None:
+        return _error_response(
+            status_code=404,
+            code="session_not_supported",
+            message="The requested session is not supported.",
+        )
+    try:
+        return load_session_tire_stints(*source_identifiers)
     except DataSourceUnavailableError:
         return _error_response(
             status_code=503,

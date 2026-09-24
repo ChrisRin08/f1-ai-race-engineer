@@ -12,6 +12,156 @@ def lap(order=1, **changes):
 @pytest.mark.parametrize(
     "changes,reason",
     [
+        ({"lap_time_ns": None}, "invalid_timing"),
+        ({"lap_number": None}, "invalid_timing"),
+        ({}, "lap_one_start"),
+        ({"lap_number": 2}, "pit_in"),
+        ({"lap_number": 2, "pit_in": False}, "pit_out"),
+        ({"lap_number": 2, "pit_in": False, "pit_out": False}, "disrupted_status"),
+    ],
+)
+def test_shared_classifier_first_match_preserves_all_diagnostics(changes, reason):
+    from app.lap_analytics import classify_structural_status_laps
+
+    source = replace(
+        lap(
+            lap_number=1, pit_in=True, pit_out=True, track_status_codes=("7", "2", "4")
+        ),
+        **changes,
+    )
+    (decision,) = classify_structural_status_laps((source,))
+    assert decision.lap is source
+    assert decision.primary_exclusion_reason == reason
+    assert decision.disruptive_statuses == (
+        "yellow",
+        "safety_car",
+        "virtual_safety_car_ending",
+    )
+
+
+def test_shared_classifier_has_no_anomaly_or_quality_pass():
+    from app.lap_analytics import classify_structural_status_laps
+
+    inputs = (
+        lap(
+            3,
+            lap_time_ns=200_000_000_000,
+            is_accurate=False,
+            provider_generated=True,
+            compound="WET",
+        ),
+        lap(1, lap_time_ns=500_000, track_status_codes=None),
+        lap(2, track_status_codes=("3", "9")),
+    )
+    decisions = classify_structural_status_laps(inputs)
+    assert tuple(d.lap for d in decisions) == inputs
+    assert all(d.primary_exclusion_reason is None for d in decisions)
+    assert all(d.disruptive_statuses == () for d in decisions)
+    assert classify_structural_status_laps(()) == ()
+
+
+def test_shared_precedence_is_only_the_first_five_public_reasons():
+    from app.lap_analytics import (
+        EXCLUSION_PRECEDENCE,
+        STRUCTURAL_STATUS_EXCLUSION_PRECEDENCE,
+        LapExclusionReason,
+    )
+
+    expected = (
+        "invalid_timing",
+        "lap_one_start",
+        "pit_in",
+        "pit_out",
+        "disrupted_status",
+    )
+    assert STRUCTURAL_STATUS_EXCLUSION_PRECEDENCE == expected
+    assert (
+        EXCLUSION_PRECEDENCE
+        == tuple(LapExclusionReason)
+        == expected + ("anomalous_pace",)
+    )
+
+
+def test_feature_two_full_policy_and_driver_relative_sample():
+    from dataclasses import asdict
+
+    from app.lap_analytics import (
+        RACE_PACE_POLICY,
+        DriverIdentity,
+        SessionFieldInput,
+        analyze_session_field,
+    )
+
+    inputs = (
+        lap(0, lap_time_ns=None),
+        lap(1, lap_number=1, pit_in=True),
+        lap(2, lap_time_ns=1_000_000_000, pit_in=True, pit_out=True),
+        lap(3, lap_time_ns=2_000_000_000, pit_out=True, track_status_codes=("2",)),
+        lap(4, lap_time_ns=3_000_000_000, track_status_codes=("4",)),
+        *(lap(i) for i in range(5, 9)),
+        lap(9, lap_time_ns=108_000_000_000),
+        lap(10, lap_time_ns=108_000_000_001),
+        *(lap(i, driver_number="2", lap_time_ns=150_000_000_000) for i in range(1, 6)),
+    )
+    result = analyze_session_field(
+        SessionFieldInput((DriverIdentity("2"), DriverIdentity("1")), inputs[::-1])
+    )
+    first, second = result.drivers
+    reasons = (
+        "invalid_timing",
+        "lap_one_start",
+        "pit_in",
+        "pit_out",
+        "disrupted_status",
+        "anomalous_pace",
+    )
+    assert [d.lap.source_order for d in first.laps] == list(range(11))
+    assert [d.primary_exclusion_reason for d in first.laps] == list(reasons[:5]) + [
+        None
+    ] * 5 + ["anomalous_pace"]
+    assert first.laps[3].disruptive_statuses == ("yellow",)
+    assert first.sample.source_lap_count == 11
+    assert first.sample.representative_lap_count == 5
+    assert first.sample.excluded_lap_count == 6
+    assert first.sample.exclusions == tuple((reason, 1) for reason in reasons)
+    assert asdict(first.metrics) == dict(
+        median_lap_time_ms=90000,
+        mean_lap_time_ms=93600,
+        fastest_lap_time_ms=90000,
+        population_standard_deviation_ms=7200,
+    )
+    assert second.sample.representative_lap_count == 5
+    assert second.metrics.median_lap_time_ms == 150000
+    assert (first.rank, second.rank, second.delta_to_best_ms) == (1, 2, 60000)
+    assert asdict(RACE_PACE_POLICY) == dict(
+        policy_id="representative-race-pace-v1",
+        primary_metric="median",
+        consistency_metric="population_standard_deviation",
+        minimum_representative_laps=5,
+        anomalous_pace_threshold_percent=120,
+        anomalous_pace_comparison="strictly_greater_than",
+        anomalous_pace_reference="driver_fastest_after_structural_status_exclusions",
+        timing_unit="milliseconds",
+        rounding="half_up",
+        ranking_method="competition",
+        tie_basis="published_median_milliseconds",
+        tie_display_order="driver_number_ascending_numeric",
+        is_accurate_used_for_exclusion=False,
+        track_conditions_adjusted=False,
+        exclusion_precedence=reasons,
+        disruptive_track_statuses=(
+            "yellow",
+            "safety_car",
+            "red_flag",
+            "virtual_safety_car",
+            "virtual_safety_car_ending",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "changes,reason",
+    [
         ({"lap_time_ns": None, "lap_number": 1, "pit_in": True}, "invalid_timing"),
         ({"lap_number": None, "pit_out": True}, "invalid_timing"),
         ({"lap_number": 1, "pit_in": True}, "lap_one_start"),

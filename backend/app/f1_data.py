@@ -168,11 +168,18 @@ def map_lap_inputs(session: Session) -> SessionFieldInput:
         raise DataSourceUnavailableError("Required session laps are unavailable.")
     if not required.issubset(table.columns):
         raise DataSourceUnavailableError("Required lap columns are unavailable.")
-    duplicated_required = required.intersection(
+    consumed = required | {
+        "IsAccurate",
+        "Compound",
+        "Stint",
+        "TyreLife",
+        "FastF1Generated",
+    }
+    duplicated_consumed = consumed.intersection(
         table.columns[table.columns.duplicated()].tolist()
     )
-    if duplicated_required:
-        raise DataSourceUnavailableError("Required lap columns are ambiguous.")
+    if duplicated_consumed:
+        raise DataSourceUnavailableError("Consumed lap columns are ambiguous.")
 
     laps = []
     for source_order, (_, row) in enumerate(table.iterrows(), 1):
@@ -180,6 +187,10 @@ def map_lap_inputs(session: Session) -> SessionFieldInput:
         if number not in numbers:
             raise DataSourceUnavailableError("Lap has no matching participant.")
         accurate = _normalize_missing(row.get("IsAccurate"))
+        generated = row.get("FastF1Generated")
+        generated = (
+            _normalize_missing(generated) if pd.api.types.is_scalar(generated) else None
+        )
         laps.append(
             SourceLap(
                 source_order=source_order,
@@ -191,6 +202,9 @@ def map_lap_inputs(session: Session) -> SessionFieldInput:
                 track_status_codes=_track_status_codes(row["TrackStatus"]),
                 is_accurate=accurate if isinstance(accurate, bool) else None,
                 compound=_optional_text(row.get("Compound")),
+                stint=_positive_integer(row.get("Stint")),
+                tyre_life=_positive_integer(row.get("TyreLife")),
+                provider_generated=generated if isinstance(generated, bool) else None,
             )
         )
     if not any(
@@ -215,6 +229,12 @@ def _lap_duration_ns(value: object) -> int | None:
     except (ValueError, OverflowError):
         return None
     return nanoseconds if nanoseconds >= MINIMUM_LAP_TIME_NS else None
+
+
+def _positive_integer(value: object) -> int | None:
+    if not pd.api.types.is_scalar(value):
+        return None
+    return _lap_number(value)
 
 
 def _lap_number(value: object) -> int | None:

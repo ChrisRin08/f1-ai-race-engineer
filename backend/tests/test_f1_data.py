@@ -15,6 +15,191 @@ from app.models import SessionTiming
 CONTROL_SOURCE_IDENTIFIERS = (2025, "Italian Grand Prix", "Race")
 
 
+@pytest.mark.parametrize(
+    "column,field", [("Stint", "stint"), ("TyreLife", "tyre_life")]
+)
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (1, 1),
+        (2.0, 2),
+        (np.int64(7), 7),
+        (np.float64(12), 12),
+        (0, None),
+        (-1, None),
+        (1.5, None),
+        (np.inf, None),
+        (-np.inf, None),
+        (np.nan, None),
+        (None, None),
+        (pd.NA, None),
+        (pd.NaT, None),
+        (True, None),
+        (False, None),
+        (np.bool_(True), None),
+        ("2", None),
+        ("bad", None),
+        ([], None),
+        ({}, None),
+    ],
+)
+def test_tire_integer_normalization(
+    pace_session_factory, column, field, value, expected
+):
+    from app.f1_data import map_lap_inputs
+
+    session = pace_session_factory(tire_columns={column: 1.0})
+    session.laps[column] = session.laps[column].astype(object)
+    session.laps.at[0, column] = value
+    mapped = map_lap_inputs(session)
+    actual = getattr(mapped.laps[0], field)
+    assert actual == expected
+    assert actual is None or type(actual) is int
+    assert len(mapped.laps) == len(session.laps)
+
+
+@pytest.mark.parametrize(
+    "column,field",
+    [("FastF1Generated", "provider_generated"), ("IsAccurate", "is_accurate")],
+)
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (True, True),
+        (False, False),
+        (np.bool_(True), True),
+        (np.bool_(False), False),
+        (None, None),
+        (pd.NA, None),
+        (np.nan, None),
+        ("true", None),
+        (1, None),
+        (0, None),
+        ([], None),
+        ({}, None),
+    ],
+)
+def test_quality_boolean_normalization(
+    pace_session_factory, column, field, value, expected
+):
+    from app.f1_data import map_lap_inputs
+
+    session = pace_session_factory()
+    session.laps[column] = pd.Series(None, index=session.laps.index, dtype=object)
+    session.laps.at[0, column] = value
+    assert getattr(map_lap_inputs(session).laps[0], field) is expected
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        "DriverNumber",
+        "LapNumber",
+        "LapTime",
+        "PitInTime",
+        "PitOutTime",
+        "TrackStatus",
+        "Compound",
+        "IsAccurate",
+        "Stint",
+        "TyreLife",
+        "FastF1Generated",
+    ],
+)
+def test_duplicate_consumed_lap_labels(pace_session_factory, column):
+    from app.f1_data import DataSourceUnavailableError, map_lap_inputs
+
+    session = pace_session_factory(
+        tire_columns={"Stint": 1.0, "TyreLife": 8.0, "FastF1Generated": False}
+    )
+    session.laps = pd.concat([session.laps, session.laps[[column]]], axis=1)
+    with pytest.raises(DataSourceUnavailableError, match="columns are ambiguous"):
+        map_lap_inputs(session)
+
+
+def test_optional_tire_columns_preserve_existing_facts(
+    pace_session_factory, monkeypatch
+):
+    from dataclasses import asdict
+
+    from app import f1_data
+    from app.lap_analytics import analyze_session_field
+
+    session = pace_session_factory()
+    session.laps.at[0, "Compound"] = "  mEdIuM  "
+    session.laps.at[0, "TrackStatus"] = "121"
+    session.laps.at[0, "PitInTime"] = pd.Timedelta(0)
+    session.laps.at[0, "IsAccurate"] = False
+    loader = Mock(side_effect=AssertionError("Normalization must not load source"))
+    monkeypatch.setattr(f1_data, "load_session", loader)
+    before = f1_data.map_lap_inputs(session)
+    assert all(
+        lap.stint is lap.tyre_life is lap.provider_generated is None
+        for lap in before.laps
+    )
+    assert before.laps[0].compound == "mEdIuM"
+    for column, value in {
+        "Stint": 3.0,
+        "TyreLife": 9.0,
+        "FastF1Generated": True,
+        "FreshTyre": False,
+        "Deleted": True,
+    }.items():
+        session.laps[column] = value
+    # Even ambiguous unused columns must not become a new source requirement.
+    session.laps = pd.concat(
+        [session.laps, session.laps[["FreshTyre", "Deleted"]]], axis=1
+    )
+    after = f1_data.map_lap_inputs(session)
+    for old, new in zip(before.laps, after.laps, strict=True):
+        facts = asdict(new)
+        assert (
+            facts.pop("stint"),
+            facts.pop("tyre_life"),
+            facts.pop("provider_generated"),
+        ) == (3, 9, True)
+        assert facts == {
+            key: value
+            for key, value in asdict(old).items()
+            if key not in {"stint", "tyre_life", "provider_generated"}
+        }
+    assert [d.metrics for d in analyze_session_field(before).drivers] == [
+        d.metrics for d in analyze_session_field(after).drivers
+    ]
+    loader.assert_not_called()
+
+
+def test_source_lap_positional_compatibility():
+    from app.lap_analytics import SourceLap
+
+    lap = SourceLap(1, "4", 2, 90_000_000_000, True, False, ("1",), False, "HARD")
+    assert (
+        lap.pit_in,
+        lap.pit_out,
+        lap.track_status_codes,
+        lap.is_accurate,
+        lap.compound,
+    ) == (True, False, ("1",), False, "HARD")
+    assert lap.stint is lap.tyre_life is lap.provider_generated is None
+
+
+@pytest.mark.parametrize("field", ["stint", "tyre_life"])
+@pytest.mark.parametrize("value", [True, 0, -1, 1.5, np.nan, np.inf, "2"])
+def test_source_lap_requires_normalized_tire_integers(field, value):
+    from app.lap_analytics import SourceLap
+
+    with pytest.raises(ValueError, match="normalized"):
+        SourceLap(1, "4", 2, 90_000_000_000, **{field: value})
+
+
+@pytest.mark.parametrize("value", [1, 0, "true", np.nan])
+def test_source_lap_requires_normalized_generated_boolean(value):
+    from app.lap_analytics import SourceLap
+
+    with pytest.raises(ValueError, match="normalized"):
+        SourceLap(1, "4", 2, 90_000_000_000, provider_generated=value)
+
+
 def test_reusable_loader_returns_the_loaded_snapshot(isolated_loader, monkeypatch):
     module = isolated_loader.module
     session = make_session()

@@ -14,7 +14,7 @@ The product analyzes real Formula 1 data, computes trusted race analytics in Pyt
 
 The frontend is responsible for presentation and user interaction. It should request structured results from the backend and render them clearly for the user.
 
-The frontend must not be the authoritative source for race analytics, tire degradation estimates, strategy calculations, or predictive results. It may format, filter, and visualize backend responses, but authoritative calculations belong in the backend.
+The frontend must not be the authoritative source for race analytics, observed tire-stint pace trends, strategy calculations, or predictive results. It may format, filter, and visualize backend responses, but authoritative calculations belong in the backend.
 
 The backend is responsible for data loading, validation, deterministic analytics, future predictive ML workflows, and API responses. It exposes those results through FastAPI.
 
@@ -34,9 +34,9 @@ Real F1 data -> deterministic Python analytics -> predictive ML when justified -
 
 The system should calculate first and explain second. Numerical race outputs must come from deterministic analytics or validated predictive models, not from an LLM.
 
-When an AI Race Engineer is introduced later, it should receive structured tool outputs and explain them in natural language. It should not invent lap times, tire degradation values, pit windows, gaps, or strategy recommendations.
+When an AI Race Engineer is introduced later, it should receive structured tool outputs and explain them in natural language. It should not invent lap times, observed tire-stint pace-trend values, pit windows, gaps, or strategy recommendations.
 
-## Planned Data Flow
+## Backend Data Flow
 
 For Demo v0.1, the intended flow is:
 
@@ -74,13 +74,73 @@ FastAPI -> pace_service.py -> f1_data.load_session (once)
 
 Policy `representative-race-pace-v1` uses median representative lap time, at least five laps, half-up millisecond publication, and published-median competition ranking. IsAccurate and Compound do not directly exclude laps. Its driver-relative 120% anomaly rule is intentionally condition-unaware and can exclude legitimate slower-condition laps; condition/stint-aware policies are deferred. See the [policy and contracts](../specs/002-lap-pace-analytics/data-model.md) for exclusion precedence and explicit insufficient-data semantics.
 
-The broader intended analytics slice for Demo v0.1 includes the following; compound/stint analysis and pit-stop timing views are not implemented by feature 002:
+## Tire-Stint Analytics Slice
+
+Feature `003-tire-stint-analytics` adds a compact session resource and an
+auditable driver resource. Each operation uses one provider snapshot:
+
+```text
+FastAPI route
+  -> stint_service
+  -> f1_data.load_session (once)
+  -> f1_data.map_lap_inputs (once) -> SourceLap values
+  -> f1_data.map_session_summary from the same snapshot
+  -> stint_analytics.analyze_session_stints (once)
+     -> shared five-rule structural/status classifier
+     -> deterministic stint construction and qualification
+     -> validated estimator sample
+     -> SciPy Theil-Sen with joint intercept
+  -> compact session or detailed driver projection
+  -> stint_models strict response
+  -> JSON
+```
+
+`f1_data.py` owns FastF1/Pandas types and missing-value adaptation. The shared
+classifier in `lap_analytics.py` owns only invalid timing, Lap 1, pit-in,
+pit-out, and disruptive-status decisions. Feature 002 adds its existing 120%
+anomaly pass after that boundary. Feature 003 instead adds explicit inaccurate,
+provider-generated, and unusable-tire-age decisions; it never applies the 120%
+rule.
+
+`stint_analytics.py` owns grouping, qualification, availability, estimation,
+and publication. Services and routes project its completed result and do not
+recalculate analytics. The source-reported stint and tire age are never
+inferred. `reported_compound` is audit/display evidence;
+`normalized_compound` is trusted for policy only when one unambiguous recognized
+compound key exists.
+
+Feature 003 drivers are unique and already ordered by numeric driver number.
+Its stints are ordered by earliest valid lap, followed by stints with no valid
+earliest lap, then reported stint ID as the deterministic tie-break. Evidence
+ordering is derived from normalized facts, retains duplicate multiplicity, and
+does not use `source_order`. The session response contains compact summaries;
+driver detail adds every normalized lap as eligible, excluded, or unassigned
+evidence.
+
+Feature 003's session response rejects direct construction with duplicate or
+noncanonical driver ordering instead of silently sorting it. Feature 002's
+older session response protects uniqueness but does not add this direct-model
+ordering invariant; that difference is intentional and does not change Feature
+002 ranking behavior. Shared `AnalyticsSessionContext.year` and
+`EventSummary.round_number` retain their existing integer schemas while strict
+runtime validation rejects boolean or string coercion.
+
+The handwritten Feature 003 OpenAPI contract and generated Pydantic/OpenAPI
+must agree on paths, operation IDs, fields, required and nullable structure,
+enum domains, constraints, ordered versus unordered semantics, and strict
+objects. The handwritten contract may include explanatory prose that generated
+schemas do not reproduce word for word, such as joint-intercept or precedence
+descriptions. Such prose-only differences are acceptable when those semantics
+remain equivalent and verified.
+
+The broader Demo v0.1 analytics direction includes the following. Tire compounds
+and observed stint trends are implemented; pit-stop timing remains future work:
 
 - Lap times
 - Fastest lap
 - Representative or average race pace
 - Tire compounds
-- Stint lengths
+- Stint lengths and observed within-stint pace trends
 - Pit-stop timing
 - Basic driver pace comparison where supported by the available data
 
@@ -91,7 +151,7 @@ Chosen technologies for the initial architecture:
 - Repository: monorepo
 - Frontend: Next.js, React, TypeScript, App Router, npm
 - Backend: Python 3.12, FastAPI, uv, pytest, Ruff
-- Analytics/data: FastF1, Pandas, NumPy
+- Analytics/data: FastF1, Pandas, NumPy, SciPy
 
 FastF1 uses the ignored repo-local `backend/cache/fastf1/` cache. The backend resolves this path from its project location, creates it on first data access, and enables FastF1's disk cache there. Application import and health checks do not create the cache or load race data.
 

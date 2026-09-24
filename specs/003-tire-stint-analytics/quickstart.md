@@ -1,8 +1,7 @@
 # Quickstart: Tire Stints & Observed Degradation Analytics
 
-This is the validation guide for Feature 003. It describes checks to run after
-implementation; planning does not execute them. Detailed rules are in
-[data-model.md](data-model.md), and the additive API contract is in
+This is the validation guide for the implemented Feature 003 behavior. Detailed
+rules are in [data-model.md](data-model.md), and the additive API contract is in
 [contracts/openapi.yaml](contracts/openapi.yaml).
 
 ## Prerequisites
@@ -16,7 +15,7 @@ All commands begin at the repository root unless stated otherwise.
 
 ## Synchronize the Reviewed Environment
 
-Feature 003 plans a direct SciPy dependency because application code imports
+Feature 003 declares a direct SciPy dependency because application code imports
 `scipy.stats.theilslopes`:
 
 ```bash
@@ -24,8 +23,8 @@ cd backend
 uv sync --locked
 ```
 
-Before accepting the implementation diff, confirm that `pyproject.toml`
-declares `scipy>=1.11,<2` and that lock regeneration did not introduce unrelated
+The reviewed `pyproject.toml` declares `scipy>=1.11,<2`. Before accepting the
+implementation diff, confirm that lock regeneration introduced no unrelated
 package changes.
 
 ## Run Routine Offline Validation
@@ -34,10 +33,10 @@ Keep live integration disabled:
 
 ```bash
 cd backend
-env -u F1_RUN_INTEGRATION uv run --offline --frozen --no-sync pytest --collect-only
-env -u F1_RUN_INTEGRATION uv run --offline --frozen --no-sync pytest
-env -u F1_RUN_INTEGRATION uv run --offline --frozen --no-sync ruff format --check .
-env -u F1_RUN_INTEGRATION uv run --offline --frozen --no-sync ruff check --no-cache .
+env -u F1_RUN_INTEGRATION PYTHONDONTWRITEBYTECODE=1 uv run --offline --frozen --no-sync pytest -p no:cacheprovider --collect-only
+env -u F1_RUN_INTEGRATION PYTHONDONTWRITEBYTECODE=1 uv run --offline --frozen --no-sync pytest -p no:cacheprovider -q
+env -u F1_RUN_INTEGRATION PYTHONDONTWRITEBYTECODE=1 uv run --offline --frozen --no-sync ruff format --check .
+env -u F1_RUN_INTEGRATION PYTHONDONTWRITEBYTECODE=1 uv run --offline --frozen --no-sync ruff check --no-cache .
 ```
 
 Expected results:
@@ -49,11 +48,13 @@ Expected results:
 - no routine test creates or modifies provider cache data;
 - JSON tests reject NaN and infinity.
 
+The latest approved pre-documentation baseline is `788 passed, 3 deselected`.
+
 An explicit integration selection without opt-in must skip safely:
 
 ```bash
 cd backend
-env -u F1_RUN_INTEGRATION uv run --offline --frozen --no-sync pytest -m integration
+env -u F1_RUN_INTEGRATION PYTHONDONTWRITEBYTECODE=1 uv run --offline --frozen --no-sync pytest -p no:cacheprovider -m integration
 ```
 
 ## Validate Normalization
@@ -62,7 +63,9 @@ Controlled Pandas tests must prove:
 
 - Stint and TyreLife accept only finite positive integral non-boolean values;
 - missing/malformed values become null without inference;
-- FastF1Generated and IsAccurate retain true/false/null semantics;
+- FastF1Generated and IsAccurate arrive as NumPy boolean scalars in the verified
+  FastF1 snapshot and normalize to Python `bool`; missing or malformed values
+  retain neutral null semantics;
 - missing quality assertions remain neutral;
 - source compound text is trimmed and case-preserved;
 - new optional columns may be absent without making Feature 002 unavailable;
@@ -109,6 +112,8 @@ Controlled immutable inputs must cover:
   estimator;
 - canonical response equality when source rows, including distinguishable and
   fully identical duplicates, are supplied in different orders;
+- numeric driver order and stint order by earliest valid lap, followed by
+  null-earliest-lap stints, then reported stint ID as the tie-break;
 - every row reconciled once across assigned/unassigned and eligible/excluded
   counts, and every unavailable result suppressing both metrics;
 - at least three identical repeated executions.
@@ -152,11 +157,12 @@ Driver detail:
 
 ```bash
 curl --fail --silent \
-  http://127.0.0.1:8000/api/v1/seasons/2025/events/italian-grand-prix/sessions/race/tire-stints/drivers/1
+  "http://127.0.0.1:8000/api/v1/seasons/2025/events/italian-grand-prix/sessions/race/tire-stints/drivers/${DRIVER_NUMBER}"
 ```
 
-Expected: the same driver/stint summaries plus one evidence record for every
-normalized driver source lap. Assigned and unassigned counts reconcile exactly.
+Set `DRIVER_NUMBER` to a canonical driver number returned by the session
+response. Expected: the same driver/stint summaries plus one evidence record for
+every normalized driver source lap. Assigned and unassigned counts reconcile exactly.
 Available slick stints contain both finite metrics; unavailable stints contain
 one reason and neither metric. Policy and limitation metadata identify the joint
 Theil-Sen method, 0.001-second publication, the exact exclusion sequence, the
@@ -168,6 +174,23 @@ Repeat either request against unchanged normalized data and against permutations
 of the same normalized rows. Parsed JSON must be identical. Exact duplicate rows
 remain as the same number of adjacent identical evidence objects; they are not
 silently deduplicated.
+
+The Feature 003 session model requires unique drivers already in numeric
+driver-number order and rejects noncanonical direct construction rather than
+sorting it. Feature 002's older session model protects uniqueness without
+adding this direct-construction ordering invariant; its ranking behavior is
+unchanged. Shared `AnalyticsSessionContext.year` and
+`EventSummary.round_number` keep their integer schema and meaning, while strict
+runtime validation rejects boolean and string coercion. Provider adaptation
+normalizes the verified NumPy `RoundNumber` scalar to Python `int`.
+
+The handwritten contract may include explanatory descriptions that generated
+Pydantic/OpenAPI does not reproduce word for word. Review parity semantically:
+paths, operation IDs, fields, required and nullable structure, enum domains,
+constraints, ordered versus unordered policy semantics, and strict object
+behavior must match. Prose-only enrichment such as the joint-intercept formula,
+sample explanation, or same-tier availability wording need not be textually
+identical.
 
 ## Validate Error Boundaries
 
@@ -183,13 +206,16 @@ Run this only when live source access is separately authorized:
 
 ```bash
 cd backend
-F1_RUN_INTEGRATION=1 uv run --frozen --no-sync pytest -m integration
+F1_RUN_INTEGRATION=1 PYTHONDONTWRITEBYTECODE=1 uv run --frozen --no-sync pytest -m integration
 ```
 
-The acceptance test validates real Monza provider columns, provenance,
-participant and lap reconciliation, deterministic ordering, finite available
-outputs, null unavailable outputs, and limitation disclosure. It does not assert
-an external analyst's degradation number.
+The accepted Monza test validates real FastF1/Pandas columns and scalar
+normalization, provenance, authoritative participants, internal and public
+stint/lap reconciliation, numeric driver and canonical stint ordering,
+deterministic repetition from the same snapshot, finite available outputs, null
+unavailable outputs, standards-safe JSON, and limitation disclosure. It does
+not assert an external analyst's degradation number or freeze any observed race
+result.
 
 ## Final Repository Audit
 

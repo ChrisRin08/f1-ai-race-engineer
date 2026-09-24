@@ -62,7 +62,7 @@ class RepresentativeRacePacePolicy(ContractModel):
 
 
 class AnalyticsSessionContext(ContractModel):
-    year: int
+    year: Annotated[int, Field(strict=True)]
     event: EventSummary
     session: SessionIdentity
     circuit: CircuitSummary

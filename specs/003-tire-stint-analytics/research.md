@@ -11,7 +11,10 @@ session snapshot.
 number, pit flags, track status, accuracy, and compound. Appending defaulted
 fields preserves existing constructors and prevents a second provider model.
 FastF1 3.8.3 declares the corresponding lap columns as `Stint` float64,
-`TyreLife` float64, and `FastF1Generated` bool.
+`TyreLife` float64, and `FastF1Generated` bool. Live acceptance observed NumPy
+boolean scalars for `FastF1Generated` and `IsAccurate`; normalization converts
+them to Python `bool`. It also observed `RoundNumber` as `numpy.int64`, which is
+normalized to Python `int` before strict public validation.
 
 **Alternatives considered**:
 
@@ -160,8 +163,8 @@ SciPy's current `separate` default. See the official
 
 ## Decision 8: Declare SciPy directly
 
-**Decision**: Add `scipy>=1.11,<2` as a direct production dependency and update
-the uv lockfile during implementation.
+**Decision**: Declare `scipy>=1.11,<2` as a direct production dependency and
+record it in the uv lockfile.
 
 **Rationale**: FastF1 currently brings SciPy transitively and `uv.lock` resolves
 1.18.1, but application code must declare what it imports. The range matches

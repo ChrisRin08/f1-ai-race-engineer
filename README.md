@@ -18,7 +18,7 @@ Real F1 data -> deterministic Python analytics -> predictive ML when justified -
 
 ## Demo v0.1 Target
 
-This week's target is Demo v0.1:
+The Demo v0.1 target is:
 
 ```text
 real F1 data -> deterministic Python analytics -> FastAPI -> frontend dashboard
@@ -37,7 +37,7 @@ Some features below are post-v0.1 and remain deferred until the architecture jus
 - Analyze tire compounds and stints
 - Display pit stops and race gaps
 - Compare two drivers
-- Estimate tire degradation
+- Report observed within-stint pace trends with explicit non-causal limits
 - Identify possible pit windows
 - Run basic what-if strategy simulations
 - Generate AI race-engineer explanations
@@ -47,7 +47,7 @@ Some features below are post-v0.1 and remain deferred until the architecture jus
 This repository is a monorepo:
 
 - `frontend/` will contain the Next.js dashboard.
-- `backend/` contains the FastAPI application, FastF1 loading/mapping, and deterministic lap/pace analytics.
+- `backend/` contains the FastAPI application, FastF1 loading/mapping, and deterministic lap, pace, and tire-stint analytics.
 - `docs/` contains product and architecture documentation.
 
 The frontend is responsible for presentation and user interaction. It must not perform authoritative race analytics or strategy calculations.
@@ -86,9 +86,9 @@ The backend is the authoritative source for data loading, validation, determinis
 
 ## Status
 
-The Python 3.12 backend exposes health, session summaries, individual lap/pace evidence, session pace ranking, and directional driver comparison with strict Pydantic contracts. The currently supported control session is the **2025 Italian Grand Prix / Monza / Race**.
+The Python 3.12 backend exposes health, session summaries, individual lap/pace evidence, session pace ranking, directional driver comparison, and observed tire-stint analytics with strict Pydantic contracts. The currently supported control session is the **2025 Italian Grand Prix / Monza / Race**.
 
-The session-summary foundation and lap/pace analytics have passed controlled offline coverage and separately opted-in Monza real-data acceptance. The Next.js dashboard, dynamic session coverage, AI/ML, persistence, authentication, deployment, and live telemetry remain deferred.
+The session-summary, lap/pace, and tire-stint capabilities have passed controlled offline coverage and separately opted-in Monza real-data acceptance. The Next.js dashboard, dynamic session coverage, AI/ML, persistence, authentication, deployment, and live telemetry remain deferred.
 
 ## Run the Backend
 
@@ -110,6 +110,8 @@ Under that session path:
 - `GET .../pace` returns every participant's pace summary in ranked order.
 - `GET .../pace/drivers/{driver_number}` returns one summary and all its classified lap evidence.
 - `GET .../pace/drivers/{driver_a}/comparisons/{driver_b}` compares two drivers from the same field analysis. Canonical driver numbers (for example `1`, not `01` or `VER`) are the public selectors.
+- `GET .../tire-stints` returns compact tire-stint summaries for every authoritative participant.
+- `GET .../tire-stints/drivers/{driver_number}` returns one driver's summaries and complete lap evidence.
 
 Malformed path inputs return `422`; well-formed unsupported tuples return `404 session_not_supported`; expected source failures return `503 data_source_unavailable`.
 
@@ -128,6 +130,28 @@ Comparison is **A's published median minus B's**: positive means A slower, negat
 Every analytics operation loads one source snapshot and performs one shared field analysis. Pure analytics are separate from provider adaptation, service projection, and HTTP handling. No cross-request cache or condition/stint/fuel/traffic correction is implemented.
 
 Session requests may contact FastF1 services. The loader creates and enables the ignored repo-local `backend/cache/fastf1/` cache on first data access. Importing the app or checking health does not create it. Summaries identify `source.provider` as `FastF1`; missing data is handled explicitly, without fabricated race facts. Laps are requested; telemetry, weather, and race-control messages are not requested.
+
+## Observed Tire-Stint Trends
+
+Policy `observed-tire-stint-pace-trend-v1` groups laps by the source-reported
+stint identifier and never reconstructs missing stint or tire-age history. For
+eligible `SOFT`, `MEDIUM`, and `HARD` stints, it uses a joint-intercept
+Theil-Sen line over reported tire age and unrounded lap time. The published
+`observed_pace_trend_seconds_per_lap` is the observed lap-time change for each
+additional lap of reported tire age: positive means laps tended to become
+slower, negative means faster, and zero is a valid rounded result.
+
+The session resource is a compact discovery view. Driver detail is the audit
+resource: every normalized source lap is retained once as eligible, excluded,
+or unassigned, with reconciled counts and a primary reason where applicable.
+Unavailable stints remain visible with no trend or residual and one of the
+documented source-data, compound, tire-age, or sample reasons.
+
+The metric is an observational association, not isolated physical tire wear.
+It is not adjusted for fuel load or burn, traffic, track evolution, driver tire
+management, changing environmental conditions, or other unmodeled race
+effects. See the [Feature 003 quickstart](specs/003-tire-stint-analytics/quickstart.md)
+for the exact policy and verification commands.
 
 ## Test the Backend
 
@@ -151,6 +175,6 @@ Only when intentionally validating real data with network access, opt in explici
 F1_RUN_INTEGRATION=1 uv run --frozen --no-sync pytest -m integration
 ```
 
-This invokes application-owned session and pace services and may download FastF1 data into the ignored cache. It is separate from routine testing.
+This invokes application-owned session, pace, and tire-stint services and may download FastF1 data into the ignored cache. It is separate from routine testing.
 
-See the [lap/pace quickstart](specs/002-lap-pace-analytics/quickstart.md), [session-summary quickstart](specs/001-backend-f1-data-access/quickstart.md), [architecture](docs/architecture.md), and [demo scope](docs/demo-v0.1.md) for details.
+See the [tire-stint quickstart](specs/003-tire-stint-analytics/quickstart.md), [lap/pace quickstart](specs/002-lap-pace-analytics/quickstart.md), [session-summary quickstart](specs/001-backend-f1-data-access/quickstart.md), [architecture](docs/architecture.md), and [demo scope](docs/demo-v0.1.md) for details.

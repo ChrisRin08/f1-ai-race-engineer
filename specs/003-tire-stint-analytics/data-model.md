@@ -13,6 +13,12 @@ record. Feature 003 appends these defaulted fields:
 | `tyre_life` | `int | None` | FastF1 `TyreLife` | Positive integral reported age or null; null is unusable for a trend |
 | `provider_generated` | `bool | None` | FastF1 `FastF1Generated` | Explicit true excludes; false passes; null is neutral |
 
+In the verified FastF1 snapshot, `Stint` and `TyreLife` arrive through floating
+provider representations, while `FastF1Generated` and `IsAccurate` arrive as
+NumPy booleans. The adapter converts accepted values to Python `int` and `bool`.
+Event year is already a Python `int`; NumPy `RoundNumber` is converted to Python
+`int` before strict public-model validation.
+
 Existing fields used by Feature 003 are `source_order`, `driver_number`,
 `lap_number`, `lap_time_ns`, `pit_in`, `pit_out`, `track_status_codes`,
 `is_accurate`, and `compound`. `source_order` remains available for Feature 002
@@ -117,6 +123,7 @@ State invariants:
 ```text
 total_lap_count = eligible_observation_count + excluded_observation_count
 excluded_observation_count = sum(exclusions.*)
+distinct_eligible_tire_age_count <= eligible_observation_count
 ```
 
 ### ObservedStintAnalysis
@@ -126,7 +133,7 @@ excluded_observation_count = sum(exclusions.*)
 | `driver_number` | canonical string | Authoritative results participant |
 | `reported_stint` | positive integer | Source identity; never renumbered |
 | `reported_compound` | string or null | Canonical case-preserved source value selected by valid lap number with null last, then lexical token order |
-| `normalized_compound` | `SOFT | MEDIUM | HARD | INTERMEDIATE | WET | null` | Recognized uppercase value only |
+| `normalized_compound` | `SOFT | MEDIUM | HARD | INTERMEDIATE | WET | null` | Recognized uppercase value only when there is one unambiguous normalized compound key; null for conflicting present keys |
 | `lap_range` | range or null | Minimum/maximum valid assigned lap number |
 | `reported_tire_age_range` | range or null | Minimum/maximum valid assigned source age |
 | `eligible_tire_age_range` | range or null | Minimum/maximum eligible source age |
@@ -138,11 +145,38 @@ excluded_observation_count = sum(exclusions.*)
 
 Availability invariants:
 
+- Conflicting non-missing compound keys retain the canonically selected
+  `reported_compound` for audit/display, but require `normalized_compound = None`,
+  status `unavailable`, and reason `inconsistent_stint_metadata`. Deterministic
+  representative-token selection does not establish trusted compound metadata.
+  `normalized_compound` may be populated only when the stint resolves to one
+  unambiguous normalized compound key; the existing reported-token selection
+  rule is unchanged.
 - available: supported slick, consistent metadata/age, at least six eligible
   distinct ages, reason null, and both metrics present;
 - unavailable: one primary reason and both metrics null;
 - a numerical zero trend is available and distinct from unavailable;
 - published metrics are multiples of 0.001 seconds after half-up quantization.
+
+`reported_compound` is the deterministic raw/audit representative token, not a
+trusted classification. `normalized_compound` is trusted only when the metadata
+resolves to one unambiguous recognized key. Never fall back from
+`normalized_compound` to `reported_compound` for analytical decisions. Public
+field descriptions preserve this distinction.
+
+Final metric presence is enforced by a runtime construction invariant:
+`available` analysis if and only if both trend and residual are present;
+`unavailable` analysis has neither metric. Qualification does not create
+placeholder metric fields.
+
+### Validated estimation boundary
+
+The estimator consumes only a validated estimation-ready sample produced after
+qualification; it does not accept the broad audit/analysis stint object.
+Unavailable or construction-invalid stints cannot produce valid estimator input
+through the application boundary. Raw/audit `laps` are not estimator
+observations; only the explicitly validated sample feeds Theil-Sen. Tests cover
+this boundary and the final metric-presence invariant.
 
 ### DriverStintAnalysis
 
@@ -172,8 +206,10 @@ public projection without re-analysis.
    with null last, reported stint with null last, reported tire age with null
    last, exact duration with null last, case-preserved compound with null last,
    pit flags, normalized track-status codes, `is_accurate`, and
-   `provider_generated`. Nullable booleans and values use explicit fixed ranks.
-   Never use source row position.
+   `provider_generated`. Nullable booleans use `False < True < None` for
+   deterministic canonical ordering only, not as a domain quality ranking.
+   Other nullable values use the explicit null-last ranks above. Never use
+   source row position.
 3. A duplicate identity is more than one normalized row for one authoritative
    driver and valid lap number. Retain every row and mark every identified stint
    represented on those rows inconsistent. This includes one-ID, cross-ID, and
@@ -194,6 +230,11 @@ public projection without re-analysis.
    stint metadata checks pass.
 9. Select the primary stint outcome by the fixed decision tree.
 10. Fit and publish the line only for available stints.
+
+Session drivers are ordered by numeric driver number. Within each driver,
+stints are ordered by earliest valid lap, with stints that have no valid
+earliest lap after those, then by reported stint ID as the deterministic
+tie-break. This order never falls back to provider row order or `source_order`.
 
 ## Availability State Flow
 
@@ -224,6 +265,13 @@ deterministic tie rule, not a claim that one semantic outcome is more important.
 Here `missing_tire_age` covers absent or malformed/unusable source values mapped
 to normalized `tyre_life = None`; no separate malformed-age reason exists.
 
+At the compound tier, ANY assigned lap with missing compound metadata selects
+`missing_compound`, even if the other assigned laps contain one otherwise
+consistent recognized slick compound: `MEDIUM, MEDIUM, None, MEDIUM` selects
+`missing_compound`. This is intentionally conservative; never infer or repair
+the missing value from the majority of rows. Higher-precedence inconsistent
+metadata and wet-weather outcomes still take precedence as specified above.
+
 ## Public Contract Models
 
 All models inherit `ContractModel`, forbid extra fields, and require nullable
@@ -237,6 +285,12 @@ ordered exclusion values, and six ordered availability tiers. The compound tier
 is an unordered two-member set containing `missing_compound` and
 `unsupported_compound`, so the contract does not assign precedence between
 them.
+
+The internal set/frozenset semantics remain equal precedence. Public/presentation
+serialization MUST use the stable canonical member order `missing_compound`,
+`unsupported_compound`, never direct iteration of an unordered set. This order
+is for deterministic presentation only and MUST NOT be interpreted as policy
+precedence.
 
 ### ObservationalLimitations
 
@@ -292,6 +346,11 @@ exact internal `lap_time_ns`.
 | `source` | existing `SourceProvenance` |
 
 No lap-evidence array appears in this response.
+
+Driver identities must be unique and already in numeric driver-number order;
+direct construction with a noncanonical order is rejected rather than sorted.
+Feature 002's older session response retains its existing uniqueness protection
+without this additional direct-construction ordering invariant.
 
 ### DriverTireStintAnalysisResponse
 

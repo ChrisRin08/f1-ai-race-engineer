@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import (
     AwareDatetime,
@@ -22,7 +22,7 @@ class HealthResponse(ContractModel):
 
 class EventSummary(ContractModel):
     name: str = Field(min_length=1)
-    round_number: PositiveInt | None
+    round_number: Annotated[PositiveInt, Field(strict=True)] | None
     country: str | None
     location: str | None
 

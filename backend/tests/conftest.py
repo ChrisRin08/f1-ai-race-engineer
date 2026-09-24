@@ -13,7 +13,7 @@ from app.main import app
 def pace_session_factory():
     """Build provider-shaped data without loading FastF1 or touching its cache."""
 
-    def make_session(*, laps=None, results=None):
+    def make_session(*, laps=None, results=None, tire_columns=None):
         if results is None:
             results = pd.DataFrame(
                 [
@@ -42,6 +42,12 @@ def pace_session_factory():
                 laps[column] = pd.Series(
                     pd.NaT, index=laps.index, dtype="timedelta64[ns]"
                 )
+        if tire_columns is not None:
+            laps = laps.copy()
+            for column, values in tire_columns.items():
+                if column not in {"Stint", "TyreLife", "FastF1Generated"}:
+                    raise ValueError(f"Unsupported tire fixture column: {column}")
+                laps[column] = values
         event = pd.Series(
             {
                 "EventName": "Italian Grand Prix",
