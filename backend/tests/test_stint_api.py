@@ -13,13 +13,13 @@ from test_stint_service import (  # noqa: F401
     make_stint_session,
 )
 
-from app import f1_data
-from app.stint_analytics import StintUnavailabilityReason
+from app.analytics.stint_analytics import StintUnavailabilityReason
+from app.data import f1_data
 
 
 @pytest.fixture
 def payload(monkeypatch, stint_session):
-    from app.stint_service import load_driver_tire_stints
+    from app.services.stint_service import load_driver_tire_stints
 
     monkeypatch.setattr(f1_data, "load_session", Mock(return_value=stint_session))
     return load_driver_tire_stints(*SOURCE, "1").model_dump(mode="json")
@@ -36,7 +36,7 @@ def objects(value):
 
 
 def test_every_public_object_forbids_extras_and_requires_nullable_fields(payload):
-    from app.stint_models import DriverTireStintAnalysisResponse
+    from app.models.stint_models import DriverTireStintAnalysisResponse
 
     for obj in objects(payload):
         obj["unexpected"] = True
@@ -54,7 +54,7 @@ def test_every_public_object_forbids_extras_and_requires_nullable_fields(payload
 
 @pytest.mark.parametrize("trend", [-1.234, 0.0, 1.234])
 def test_signed_finite_trend_and_frozen_models(payload, trend):
-    from app.stint_models import DriverTireStintAnalysisResponse
+    from app.models.stint_models import DriverTireStintAnalysisResponse
 
     payload["driver"]["stints"][0]["observed_pace_trend_seconds_per_lap"] = trend
     result = DriverTireStintAnalysisResponse.model_validate(payload)
@@ -89,7 +89,7 @@ def test_signed_finite_trend_and_frozen_models(payload, trend):
     ],
 )
 def test_available_rejects_invalid_metrics_or_state(payload, key, value):
-    from app.stint_models import DriverTireStintAnalysisResponse
+    from app.models.stint_models import DriverTireStintAnalysisResponse
 
     payload["driver"]["stints"][0][key] = value
     with pytest.raises(ValidationError):
@@ -107,7 +107,7 @@ def test_available_rejects_invalid_metrics_or_state(payload, key, value):
     ],
 )
 def test_unavailable_requires_reason_and_null_metrics(payload, key, value):
-    from app.stint_models import DriverTireStintAnalysisResponse
+    from app.models.stint_models import DriverTireStintAnalysisResponse
 
     payload["driver"]["stints"][1][key] = value
     with pytest.raises(ValidationError):
@@ -138,7 +138,7 @@ def test_unavailable_requires_reason_and_null_metrics(payload, key, value):
     ],
 )
 def test_public_evidence_and_sample_reconciliation(payload, mutation):
-    from app.stint_models import DriverTireStintAnalysisResponse
+    from app.models.stint_models import DriverTireStintAnalysisResponse
 
     sample = payload["driver"]["stints"][0]["sample"]
     if mutation == "drop":
@@ -182,7 +182,7 @@ def test_public_evidence_and_sample_reconciliation(payload, mutation):
 
 
 def test_policy_and_limitations_contract(payload):
-    from app.stint_models import DriverTireStintAnalysisResponse
+    from app.models.stint_models import DriverTireStintAnalysisResponse
 
     policy = payload["policy"]
     assert policy["estimator"] == "theil_sen"
@@ -255,8 +255,8 @@ def test_driver_route_complete_finite_deterministic_response(
 ):
     import json
 
-    from app import stint_analytics
-    from app.stint_models import DriverTireStintAnalysisResponse
+    from app.analytics import stint_analytics
+    from app.models.stint_models import DriverTireStintAnalysisResponse
 
     source = controlled_stint_source.return_value
     source.laps.loc[source.laps.Stint == 9, "Compound"] = compound
@@ -322,7 +322,7 @@ def test_driver_selectors_fail_before_source(
 def test_known_empty_or_unavailable_driver_is_not_missing(
     client, monkeypatch, controlled_stint_source, number, status
 ):
-    from app import stint_analytics
+    from app.analytics import stint_analytics
 
     analyzer = Mock(wraps=stint_analytics.analyze_session_stints)
     monkeypatch.setattr(stint_analytics, "analyze_session_stints", analyzer)
@@ -348,7 +348,7 @@ def test_known_empty_or_unavailable_driver_is_not_missing(
 def test_driver_error_boundary(monkeypatch, controlled_stint_source, stage, internal):
     from fastapi.testclient import TestClient
 
-    from app import stint_analytics
+    from app.analytics import stint_analytics
     from app.main import app
 
     failure = (RuntimeError if internal else f1_data.DataSourceUnavailableError)(
@@ -388,7 +388,7 @@ def test_driver_error_boundary(monkeypatch, controlled_stint_source, stage, inte
 def test_direct_available_summary_rejects_impossible_public_facts(
     payload, compound, eligible, distinct
 ):
-    from app.stint_models import ObservedStintSummary, StintSample
+    from app.models.stint_models import ObservedStintSummary, StintSample
 
     summary = payload["driver"]["stints"][0]
     summary["normalized_compound"] = compound
@@ -411,7 +411,7 @@ def test_direct_available_summary_rejects_impossible_public_facts(
 def test_direct_available_summary_preserves_slicks_and_signed_metrics(
     payload, compound, trend
 ):
-    from app.stint_models import ObservedStintSummary
+    from app.models.stint_models import ObservedStintSummary
 
     summary = payload["driver"]["stints"][0]
     summary.update(
@@ -437,7 +437,7 @@ def test_direct_available_summary_preserves_slicks_and_signed_metrics(
     ],
 )
 def test_direct_unavailable_summary_keeps_audit_states(payload, compound, reason):
-    from app.stint_models import ObservedStintSummary
+    from app.models.stint_models import ObservedStintSummary
 
     summary = payload["driver"]["stints"][1]
     summary.update(
@@ -459,7 +459,7 @@ def test_direct_unavailable_summary_keeps_audit_states(payload, compound, reason
     "reason", list(StintUnavailabilityReason), ids=lambda reason: reason.value
 )
 def test_every_unavailability_reason_is_publicly_projectable(payload, reason):
-    from app.stint_models import ObservedStintSummary
+    from app.models.stint_models import ObservedStintSummary
 
     summary = payload["driver"]["stints"][1]
     summary["unavailability_reason"] = reason.value
@@ -520,7 +520,7 @@ def test_session_route_compact_finite_deterministic_response(
 ):
     import json
 
-    from app import stint_analytics
+    from app.analytics import stint_analytics
 
     loader = Mock(return_value=stint_field_session)
     analyzer = Mock(wraps=stint_analytics.analyze_session_stints)
@@ -596,7 +596,7 @@ def test_session_route_error_boundary(
 ):
     from fastapi.testclient import TestClient
 
-    from app import stint_analytics
+    from app.analytics import stint_analytics
     from app.main import app
 
     failure = (RuntimeError if internal else f1_data.DataSourceUnavailableError)(
@@ -620,7 +620,7 @@ def test_session_route_error_boundary(
 
 
 def test_session_model_reuses_strict_compact_contract(payload):
-    from app.stint_models import SessionTireStintAnalysisResponse
+    from app.models.stint_models import SessionTireStintAnalysisResponse
 
     body = {
         key: value for key, value in payload.items() if key not in {"driver", "laps"}
@@ -681,8 +681,8 @@ def test_session_model_reuses_strict_compact_contract(payload):
 def test_session_model_driver_identities_and_order(
     monkeypatch, stint_field_session, numbers, error
 ):
-    from app.stint_models import SessionTireStintAnalysisResponse
-    from app.stint_service import load_session_tire_stints
+    from app.models.stint_models import SessionTireStintAnalysisResponse
+    from app.services.stint_service import load_session_tire_stints
 
     monkeypatch.setattr(f1_data, "load_session", Mock(return_value=stint_field_session))
     response = load_session_tire_stints(*SOURCE)

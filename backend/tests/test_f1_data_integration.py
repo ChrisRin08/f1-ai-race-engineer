@@ -13,9 +13,10 @@ pytestmark = pytest.mark.integration
     reason="Set F1_RUN_INTEGRATION=1 to run the real FastF1 integration test.",
 )
 def test_real_monza_tire_stints_through_application_service(monkeypatch) -> None:
-    from app import f1_data, stint_analytics
-    from app.stint_analytics import StintUnavailabilityReason
-    from app.stint_service import load_session_tire_stints
+    from app.analytics import stint_analytics
+    from app.analytics.stint_analytics import StintUnavailabilityReason
+    from app.data import f1_data
+    from app.services.stint_service import load_session_tire_stints
 
     source = (2025, "Italian Grand Prix", "Race")
     real_map = f1_data.map_lap_inputs
@@ -174,7 +175,7 @@ def test_real_monza_tire_stints_through_application_service(monkeypatch) -> None
     reason="Set F1_RUN_INTEGRATION=1 to run the real FastF1 integration test.",
 )
 def test_real_monza_race_pace_through_application_service() -> None:
-    from app.pace_service import (
+    from app.services.pace_service import (
         load_driver_pace,
         load_pace_comparison,
         load_session_pace,
@@ -245,7 +246,7 @@ def test_real_monza_race_pace_through_application_service() -> None:
     reason="Set F1_RUN_INTEGRATION=1 to run the real FastF1 integration test.",
 )
 def test_real_monza_race_session_maps_to_control_summary() -> None:
-    from app.f1_data import load_session_summary
+    from app.data.f1_data import load_session_summary
 
     summary = load_session_summary(2025, "Italian Grand Prix", "Race")
 

@@ -3,25 +3,30 @@ from typing import Annotated
 from fastapi import FastAPI, Path
 from fastapi.responses import JSONResponse
 
-from app.f1_data import DataSourceUnavailableError, load_session_summary
-from app.models import ErrorDetail, ErrorResponse, HealthResponse, SessionSummary
-from app.pace_models import (
+from app.data.f1_data import DataSourceUnavailableError, load_session_summary
+from app.models.pace_models import (
     DRIVER_NUMBER_PATTERN,
     DriverPaceAnalysisResponse,
     DriverPaceComparisonResponse,
     SessionPaceAnalysisResponse,
 )
-from app.pace_service import (
+from app.models.session_models import (
+    ErrorDetail,
+    ErrorResponse,
+    HealthResponse,
+    SessionSummary,
+)
+from app.models.stint_models import (
+    DriverTireStintAnalysisResponse,
+    SessionTireStintAnalysisResponse,
+)
+from app.services.pace_service import (
     DriverNotFoundError,
     load_driver_pace,
     load_pace_comparison,
     load_session_pace,
 )
-from app.stint_models import (
-    DriverTireStintAnalysisResponse,
-    SessionTireStintAnalysisResponse,
-)
-from app.stint_service import load_driver_tire_stints, load_session_tire_stints
+from app.services.stint_service import load_driver_tire_stints, load_session_tire_stints
 
 app = FastAPI(title="F1 AI Race Engineer Backend", version="0.1.0")
 

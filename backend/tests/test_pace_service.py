@@ -2,7 +2,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from app import f1_data, lap_analytics
+from app.analytics import lap_analytics
+from app.data import f1_data
 
 SOURCE = (2025, "Italian Grand Prix", "Race")
 
@@ -13,7 +14,7 @@ def test_session_projection_retains_complete_ordered_field(
 ):
     import pandas as pd
 
-    from app.pace_service import load_session_pace
+    from app.services.pace_service import load_session_pace
 
     session = pace_session_factory()
     session.laps.loc[session.laps.DriverNumber == "1", "DriverNumber"] = "10"
@@ -83,7 +84,7 @@ def test_session_projection_retains_complete_ordered_field(
 def test_comparison_projects_one_shared_analysis(
     monkeypatch, pace_session_factory, a, b, delta, outcome, winner
 ):
-    from app import pace_service
+    from app.services import pace_service
 
     session = pace_session_factory()
     loader = Mock(return_value=session)
@@ -124,7 +125,7 @@ def test_comparison_uses_published_medians_and_repeats(
 ):
     import pandas as pd
 
-    from app.pace_service import load_pace_comparison
+    from app.services.pace_service import load_pace_comparison
 
     session = pace_session_factory()
     # These differ internally but tie publicly; subtracting before publication
@@ -150,7 +151,7 @@ def test_comparison_uses_published_medians_and_repeats(
 def test_driver_operation_uses_one_snapshot_and_field_analysis(
     monkeypatch, pace_session_factory, number
 ):
-    from app import pace_service
+    from app.services import pace_service
 
     session = pace_session_factory()
     loader = Mock(return_value=session)
@@ -197,7 +198,7 @@ def test_driver_operation_uses_one_snapshot_and_field_analysis(
 def test_driver_operations_do_not_cache_across_requests(
     monkeypatch, pace_session_factory
 ):
-    from app.pace_service import load_driver_pace
+    from app.services.pace_service import load_driver_pace
 
     loader = Mock(return_value=pace_session_factory())
     monkeypatch.setattr(f1_data, "load_session", loader)
@@ -211,7 +212,7 @@ def test_driver_operations_do_not_cache_across_requests(
     "failure", [f1_data.DataSourceUnavailableError("source"), RuntimeError("bug")]
 )
 def test_service_preserves_expected_and_unexpected_failures(monkeypatch, failure):
-    from app.pace_service import load_driver_pace
+    from app.services.pace_service import load_driver_pace
 
     monkeypatch.setattr(f1_data, "load_session", Mock(side_effect=failure))
     with pytest.raises(type(failure), match=str(failure)):

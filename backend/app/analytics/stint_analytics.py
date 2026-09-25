@@ -9,7 +9,7 @@ from statistics import median
 
 from scipy.stats import theilslopes
 
-from app.lap_analytics import (
+from app.analytics.lap_analytics import (
     STRUCTURAL_STATUS_EXCLUSION_PRECEDENCE,
     DisruptiveTrackStatus,
     DriverIdentity,

@@ -4,8 +4,8 @@ from unittest.mock import Mock, call
 import pytest
 
 import app.main as main_module
-from app.f1_data import DataSourceUnavailableError
-from app.models import ErrorResponse
+from app.data.f1_data import DataSourceUnavailableError
+from app.models.session_models import ErrorResponse
 
 CONTROL_SESSION_URL = "/api/v1/seasons/2025/events/italian-grand-prix/sessions/race"
 

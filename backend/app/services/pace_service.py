@@ -2,9 +2,9 @@
 
 from dataclasses import asdict
 
-from app import f1_data, lap_analytics
-from app.models import SessionSummary
-from app.pace_models import (
+from app.analytics import lap_analytics
+from app.data import f1_data
+from app.models.pace_models import (
     AnalyticsDriverIdentity,
     AnalyticsSessionContext,
     DriverPaceAnalysisResponse,
@@ -18,6 +18,7 @@ from app.pace_models import (
     RepresentativeRacePacePolicy,
     SessionPaceAnalysisResponse,
 )
+from app.models.session_models import SessionSummary
 
 
 class DriverNotFoundError(LookupError):

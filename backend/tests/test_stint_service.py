@@ -6,7 +6,8 @@ from unittest.mock import Mock
 import pandas as pd
 import pytest
 
-from app import f1_data, stint_analytics
+from app.analytics import stint_analytics
+from app.data import f1_data
 
 SOURCE = (2025, "Italian Grand Prix", "Race")
 
@@ -41,8 +42,8 @@ def make_stint_session(pace_session_factory):
 
 @pytest.mark.parametrize("number", ["1", "4", "27", "999"])
 def test_driver_uses_one_complete_snapshot(monkeypatch, stint_session, number):
-    from app import stint_service
-    from app.pace_service import DriverNotFoundError
+    from app.services import stint_service
+    from app.services.pace_service import DriverNotFoundError
 
     loaded = Mock(return_value=stint_session)
     mapped = Mock(wraps=f1_data.map_lap_inputs)
@@ -95,7 +96,7 @@ def test_driver_uses_one_complete_snapshot(monkeypatch, stint_session, number):
 def test_projection_preserves_analytics_without_recalculation(
     monkeypatch, stint_session
 ):
-    from app import stint_service
+    from app.services import stint_service
 
     inputs = f1_data.map_lap_inputs(stint_session)
     field = stint_analytics.analyze_session_stints(inputs)
@@ -134,7 +135,7 @@ def test_projection_preserves_analytics_without_recalculation(
 
 
 def test_canonical_repeats_and_duplicate_multiplicity(monkeypatch, stint_session):
-    from app.stint_service import load_driver_tire_stints
+    from app.services.stint_service import load_driver_tire_stints
 
     # Add two identical assigned rows: retain them and the blocked stint.
     stint_session.laps = stint_session.laps.iloc[
@@ -163,7 +164,7 @@ def test_canonical_repeats_and_duplicate_multiplicity(monkeypatch, stint_session
 )
 @pytest.mark.parametrize("error", [f1_data.DataSourceUnavailableError, RuntimeError])
 def test_service_propagates_failures(monkeypatch, stint_session, stage, error):
-    from app.stint_service import load_driver_tire_stints
+    from app.services.stint_service import load_driver_tire_stints
 
     monkeypatch.setattr(f1_data, "load_session", Mock(return_value=stint_session))
     failure = error("private failure")
@@ -195,7 +196,7 @@ def make_stint_field_session(stint_session):
 
 
 def test_session_uses_one_complete_snapshot(monkeypatch, stint_field_session):
-    from app import stint_service
+    from app.services import stint_service
 
     inputs = f1_data.map_lap_inputs(stint_field_session)
     summary = f1_data.map_session_summary(stint_field_session)
@@ -250,7 +251,7 @@ def test_session_uses_one_complete_snapshot(monkeypatch, stint_field_session):
 def test_session_projects_the_same_summaries_without_recalculation(
     monkeypatch, stint_field_session
 ):
-    from app import stint_service
+    from app.services import stint_service
 
     field = stint_analytics.analyze_session_stints(
         f1_data.map_lap_inputs(stint_field_session)
@@ -289,7 +290,7 @@ def test_session_projects_the_same_summaries_without_recalculation(
 def test_session_determinism_preserves_duplicates_and_ignores_source_order(
     monkeypatch, stint_field_session
 ):
-    from app.stint_service import load_session_tire_stints
+    from app.services.stint_service import load_session_tire_stints
 
     source = stint_field_session
     source.laps = source.laps.iloc[[*range(len(source.laps)), 2, 2]].reset_index(
@@ -333,7 +334,7 @@ def test_session_determinism_preserves_duplicates_and_ignores_source_order(
 )
 @pytest.mark.parametrize("error", [f1_data.DataSourceUnavailableError, RuntimeError])
 def test_session_service_propagates_failures(monkeypatch, stint_session, stage, error):
-    from app.stint_service import load_session_tire_stints
+    from app.services.stint_service import load_session_tire_stints
 
     monkeypatch.setattr(f1_data, "load_session", Mock(return_value=stint_session))
     failure = error("private failure")

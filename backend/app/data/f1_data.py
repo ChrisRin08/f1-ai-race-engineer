@@ -12,13 +12,13 @@ import pandas as pd
 from fastf1.core import Session
 from fastf1.exceptions import DataNotLoadedError, RateLimitExceededError
 
-from app.lap_analytics import (
+from app.analytics.lap_analytics import (
     MINIMUM_LAP_TIME_NS,
     DriverIdentity,
     SessionFieldInput,
     SourceLap,
 )
-from app.models import (
+from app.models.session_models import (
     AvailabilityStatus,
     CircuitSummary,
     DataAvailability,
@@ -30,7 +30,7 @@ from app.models import (
     SourceProvenance,
 )
 
-FASTF1_CACHE_DIR = Path(__file__).resolve().parents[1] / "cache" / "fastf1"
+FASTF1_CACHE_DIR = Path(__file__).resolve().parents[2] / "cache" / "fastf1"
 
 
 class DataSourceUnavailableError(RuntimeError):

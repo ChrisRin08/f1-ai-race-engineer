@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from app.lap_analytics import RACE_PACE_POLICY
+from app.analytics.lap_analytics import RACE_PACE_POLICY
 
 BASE = "/api/v1/seasons/2025/events/italian-grand-prix/sessions/race"
 
@@ -23,8 +23,8 @@ BASE = "/api/v1/seasons/2025/events/italian-grand-prix/sessions/race"
 def test_comparison_endpoint(
     client, controlled_source, monkeypatch, a, b, delta, outcome
 ):
-    from app import lap_analytics
-    from app.pace_models import DriverPaceComparisonResponse
+    from app.analytics import lap_analytics
+    from app.models.pace_models import DriverPaceComparisonResponse
 
     analyzer = Mock(wraps=lap_analytics.analyze_session_field)
     monkeypatch.setattr(lap_analytics, "analyze_session_field", analyzer)
@@ -78,7 +78,7 @@ def test_new_resources_validate_session_before_load(
 @pytest.mark.parametrize("suffix", ["/pace/drivers/1/comparisons/4", "/pace"])
 @pytest.mark.parametrize("internal", [False, True])
 def test_new_resources_preserve_failure_boundary(controlled_source, suffix, internal):
-    from app.f1_data import DataSourceUnavailableError
+    from app.data.f1_data import DataSourceUnavailableError
     from app.main import app
 
     error = RuntimeError if internal else DataSourceUnavailableError
@@ -106,7 +106,7 @@ def test_new_resources_preserve_failure_boundary(controlled_source, suffix, inte
     ],
 )
 def test_comparison_result_contract_rejects_invalid_state(key, value):
-    from app.pace_models import DriverPaceComparisonResult
+    from app.models.pace_models import DriverPaceComparisonResult
 
     payload = dict(
         status="available",
@@ -122,8 +122,8 @@ def test_comparison_result_contract_rejects_invalid_state(key, value):
 def test_comparison_response_rejects_extra_and_inconsistent_availability(
     controlled_source,
 ):
-    from app.pace_models import DriverPaceComparisonResponse
-    from app.pace_service import load_pace_comparison
+    from app.models.pace_models import DriverPaceComparisonResponse
+    from app.services.pace_service import load_pace_comparison
 
     payload = load_pace_comparison(
         2025, "Italian Grand Prix", "Race", "1", "4"
@@ -153,8 +153,8 @@ def test_comparison_response_rejects_extra_and_inconsistent_availability(
 def test_comparison_response_requires_delta_from_published_medians(
     controlled_source, delta, outcome, winner
 ):
-    from app.pace_models import DriverPaceComparisonResponse
-    from app.pace_service import load_pace_comparison
+    from app.models.pace_models import DriverPaceComparisonResponse
+    from app.services.pace_service import load_pace_comparison
 
     payload = load_pace_comparison(
         2025, "Italian Grand Prix", "Race", "1", "4"
@@ -171,8 +171,8 @@ def test_comparison_response_requires_delta_from_published_medians(
 def test_driver_evidence_requires_unique_but_not_consecutive_source_order(
     controlled_source,
 ):
-    from app.pace_models import DriverPaceAnalysisResponse
-    from app.pace_service import load_driver_pace
+    from app.models.pace_models import DriverPaceAnalysisResponse
+    from app.services.pace_service import load_driver_pace
 
     payload = load_driver_pace(2025, "Italian Grand Prix", "Race", "1").model_dump()
     payload["laps"][1]["source_order"] = 100
@@ -183,8 +183,8 @@ def test_driver_evidence_requires_unique_but_not_consecutive_source_order(
 
 
 def test_session_response_requires_unique_driver_numbers(controlled_source):
-    from app.pace_models import SessionPaceAnalysisResponse
-    from app.pace_service import load_session_pace
+    from app.models.pace_models import SessionPaceAnalysisResponse
+    from app.services.pace_service import load_session_pace
 
     payload = load_session_pace(2025, "Italian Grand Prix", "Race").model_dump()
     payload["drivers"][1]["driver"]["driver_number"] = payload["drivers"][0]["driver"][
@@ -196,7 +196,7 @@ def test_session_response_requires_unique_driver_numbers(controlled_source):
 
 @pytest.fixture
 def controlled_source(monkeypatch, pace_session_factory):
-    from app import f1_data
+    from app.data import f1_data
 
     loader = Mock(return_value=pace_session_factory())
     monkeypatch.setattr(f1_data, "load_session", loader)
@@ -205,8 +205,8 @@ def controlled_source(monkeypatch, pace_session_factory):
 
 @pytest.mark.parametrize("no_eligible", [False, True])
 def test_session_pace_endpoint(client, controlled_source, monkeypatch, no_eligible):
-    from app import lap_analytics
-    from app.pace_models import SessionPaceAnalysisResponse
+    from app.analytics import lap_analytics
+    from app.models.pace_models import SessionPaceAnalysisResponse
 
     analyzer = Mock(wraps=lap_analytics.analyze_session_field)
     monkeypatch.setattr(lap_analytics, "analyze_session_field", analyzer)
@@ -237,7 +237,7 @@ def test_session_pace_endpoint(client, controlled_source, monkeypatch, no_eligib
 def test_driver_endpoint_returns_complete_deterministic_evidence(
     client, controlled_source
 ):
-    from app.pace_models import DriverPaceAnalysisResponse
+    from app.models.pace_models import DriverPaceAnalysisResponse
 
     first = client.get(BASE + "/pace/drivers/4")
     second = client.get(BASE + "/pace/drivers/4")
@@ -361,7 +361,7 @@ def test_session_validation_precedes_source(
 def test_unknown_driver_is_404_after_one_analysis(
     client, controlled_source, monkeypatch
 ):
-    from app import lap_analytics
+    from app.analytics import lap_analytics
 
     analyzer = Mock(wraps=lap_analytics.analyze_session_field)
     monkeypatch.setattr(lap_analytics, "analyze_session_field", analyzer)
@@ -373,7 +373,7 @@ def test_unknown_driver_is_404_after_one_analysis(
 
 
 def test_source_failure_is_controlled_503(client, controlled_source):
-    from app.f1_data import DataSourceUnavailableError
+    from app.data.f1_data import DataSourceUnavailableError
 
     controlled_source.side_effect = DataSourceUnavailableError("private source detail")
     response = client.get(BASE + "/pace/drivers/1")
@@ -439,7 +439,7 @@ def summary_payload():
 
 
 def test_summary_contract_accepts_minimum_timing_and_zero_spread():
-    from app.pace_models import DriverPaceSummary
+    from app.models.pace_models import DriverPaceSummary
 
     payload = summary_payload()
     assert DriverPaceSummary.model_validate(payload).model_dump(mode="json") == payload
@@ -450,7 +450,7 @@ def test_summary_contract_accepts_minimum_timing_and_zero_spread():
     [(), ("driver",), ("sample",), ("sample", "exclusions"), ("metrics",), ("source",)],
 )
 def test_contract_rejects_extra_fields_at_each_level(path):
-    from app.pace_models import DriverPaceSummary
+    from app.models.pace_models import DriverPaceSummary
 
     payload = summary_payload()
     target = payload
@@ -463,7 +463,7 @@ def test_contract_rejects_extra_fields_at_each_level(path):
 
 @pytest.mark.parametrize("number", ["01", "0", "-1", "VER", "1.0", " 1", 1])
 def test_contract_requires_canonical_driver_number(number):
-    from app.pace_models import DriverPaceSummary
+    from app.models.pace_models import DriverPaceSummary
 
     payload = summary_payload()
     payload["driver"]["driver_number"] = number
@@ -482,7 +482,7 @@ def test_contract_requires_canonical_driver_number(number):
     ],
 )
 def test_available_contract_rejects_inconsistent_state(key, value):
-    from app.pace_models import DriverPaceSummary
+    from app.models.pace_models import DriverPaceSummary
 
     payload = summary_payload()
     payload[key] = value
@@ -491,7 +491,7 @@ def test_available_contract_rejects_inconsistent_state(key, value):
 
 
 def test_insufficient_contract_requires_null_metrics_and_small_sample():
-    from app.pace_models import DriverPaceSummary
+    from app.models.pace_models import DriverPaceSummary
 
     payload = summary_payload()
     payload.update(
@@ -514,7 +514,7 @@ def test_insufficient_contract_requires_null_metrics_and_small_sample():
     "key", ["source_lap_count", "representative_lap_count", "excluded_lap_count"]
 )
 def test_sample_counts_must_reconcile(key):
-    from app.pace_models import DriverPaceSummary
+    from app.models.pace_models import DriverPaceSummary
 
     payload = summary_payload()
     payload["sample"][key] += 1
@@ -524,7 +524,7 @@ def test_sample_counts_must_reconcile(key):
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), 0, -1, True, "1"])
 def test_duration_contract_rejects_invalid_numbers(value):
-    from app.pace_models import DriverPaceSummary
+    from app.models.pace_models import DriverPaceSummary
 
     payload = summary_payload()
     payload["metrics"]["median_lap_time_ms"] = value
@@ -533,7 +533,7 @@ def test_duration_contract_rejects_invalid_numbers(value):
 
 
 def test_policy_contract_is_exact_and_immutable():
-    from app.pace_models import RepresentativeRacePacePolicy
+    from app.models.pace_models import RepresentativeRacePacePolicy
 
     policy = RepresentativeRacePacePolicy.model_validate(asdict(RACE_PACE_POLICY))
     assert policy.track_conditions_adjusted is False
@@ -563,7 +563,7 @@ def test_policy_contract_is_exact_and_immutable():
     ],
 )
 def test_lap_classification_contract(classification, reason, lap_number, time, valid):
-    from app.pace_models import LapClassification
+    from app.models.pace_models import LapClassification
 
     payload = dict(
         source_order=1,

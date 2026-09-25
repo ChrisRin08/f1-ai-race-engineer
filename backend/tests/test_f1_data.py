@@ -10,7 +10,7 @@ import pytest
 from fastf1.exceptions import DataNotLoadedError, RateLimitExceededError
 from pydantic import ValidationError
 
-from app.models import SessionTiming
+from app.models.session_models import SessionTiming
 
 CONTROL_SOURCE_IDENTIFIERS = (2025, "Italian Grand Prix", "Race")
 
@@ -46,7 +46,7 @@ CONTROL_SOURCE_IDENTIFIERS = (2025, "Italian Grand Prix", "Race")
 def test_tire_integer_normalization(
     pace_session_factory, column, field, value, expected
 ):
-    from app.f1_data import map_lap_inputs
+    from app.data.f1_data import map_lap_inputs
 
     session = pace_session_factory(tire_columns={column: 1.0})
     session.laps[column] = session.laps[column].astype(object)
@@ -82,7 +82,7 @@ def test_tire_integer_normalization(
 def test_quality_boolean_normalization(
     pace_session_factory, column, field, value, expected
 ):
-    from app.f1_data import map_lap_inputs
+    from app.data.f1_data import map_lap_inputs
 
     session = pace_session_factory()
     session.laps[column] = pd.Series(None, index=session.laps.index, dtype=object)
@@ -107,7 +107,7 @@ def test_quality_boolean_normalization(
     ],
 )
 def test_duplicate_consumed_lap_labels(pace_session_factory, column):
-    from app.f1_data import DataSourceUnavailableError, map_lap_inputs
+    from app.data.f1_data import DataSourceUnavailableError, map_lap_inputs
 
     session = pace_session_factory(
         tire_columns={"Stint": 1.0, "TyreLife": 8.0, "FastF1Generated": False}
@@ -122,8 +122,8 @@ def test_optional_tire_columns_preserve_existing_facts(
 ):
     from dataclasses import asdict
 
-    from app import f1_data
-    from app.lap_analytics import analyze_session_field
+    from app.analytics.lap_analytics import analyze_session_field
+    from app.data import f1_data
 
     session = pace_session_factory()
     session.laps.at[0, "Compound"] = "  mEdIuM  "
@@ -170,7 +170,7 @@ def test_optional_tire_columns_preserve_existing_facts(
 
 
 def test_source_lap_positional_compatibility():
-    from app.lap_analytics import SourceLap
+    from app.analytics.lap_analytics import SourceLap
 
     lap = SourceLap(1, "4", 2, 90_000_000_000, True, False, ("1",), False, "HARD")
     assert (
@@ -186,7 +186,7 @@ def test_source_lap_positional_compatibility():
 @pytest.mark.parametrize("field", ["stint", "tyre_life"])
 @pytest.mark.parametrize("value", [True, 0, -1, 1.5, np.nan, np.inf, "2"])
 def test_source_lap_requires_normalized_tire_integers(field, value):
-    from app.lap_analytics import SourceLap
+    from app.analytics.lap_analytics import SourceLap
 
     with pytest.raises(ValueError, match="normalized"):
         SourceLap(1, "4", 2, 90_000_000_000, **{field: value})
@@ -194,7 +194,7 @@ def test_source_lap_requires_normalized_tire_integers(field, value):
 
 @pytest.mark.parametrize("value", [1, 0, "true", np.nan])
 def test_source_lap_requires_normalized_generated_boolean(value):
-    from app.lap_analytics import SourceLap
+    from app.analytics.lap_analytics import SourceLap
 
     with pytest.raises(ValueError, match="normalized"):
         SourceLap(1, "4", 2, 90_000_000_000, provider_generated=value)
@@ -214,7 +214,7 @@ def test_reusable_loader_returns_the_loaded_snapshot(isolated_loader, monkeypatc
 
 
 def test_summary_wrapper_loads_and_maps_once(monkeypatch):
-    import app.f1_data as module
+    import app.data.f1_data as module
 
     snapshot = object()
     loader = Mock(return_value=snapshot)
@@ -244,7 +244,7 @@ def test_summary_wrapper_loads_and_maps_once(monkeypatch):
     ],
 )
 def test_normalize_lap_duration_boundary(pace_session_factory, value, expected):
-    from app.f1_data import map_lap_inputs
+    from app.data.f1_data import map_lap_inputs
 
     session = pace_session_factory()
     session.laps["LapTime"] = session.laps["LapTime"].astype(object)
@@ -269,7 +269,7 @@ def test_normalize_lap_duration_boundary(pace_session_factory, value, expected):
     ],
 )
 def test_normalize_lap_number(pace_session_factory, value, expected):
-    from app.f1_data import map_lap_inputs
+    from app.data.f1_data import map_lap_inputs
 
     session = pace_session_factory()
     session.laps["LapNumber"] = session.laps["LapNumber"].astype(object)
@@ -278,7 +278,7 @@ def test_normalize_lap_number(pace_session_factory, value, expected):
 
 
 def test_normalize_source_diagnostics_and_order(pace_session_factory):
-    from app.f1_data import map_lap_inputs
+    from app.data.f1_data import map_lap_inputs
 
     session = pace_session_factory()
     session.laps.at[0, "TrackStatus"] = "72422713"
@@ -301,7 +301,7 @@ def test_normalize_source_diagnostics_and_order(pace_session_factory):
     [(None, None), ("", None), ("3", ("3",)), ("9", ("9",)), ("121", ("1", "2"))],
 )
 def test_normalize_status_absence_and_unknown(pace_session_factory, value, expected):
-    from app.f1_data import map_lap_inputs
+    from app.data.f1_data import map_lap_inputs
 
     session = pace_session_factory()
     session.laps.at[0, "TrackStatus"] = value
@@ -316,7 +316,7 @@ def test_normalize_status_absence_and_unknown(pace_session_factory, value, expec
     ["DriverNumber", "LapNumber", "LapTime", "PitInTime", "PitOutTime", "TrackStatus"],
 )
 def test_normalize_rejects_missing_required_columns(pace_session_factory, column):
-    from app.f1_data import DataSourceUnavailableError, map_lap_inputs
+    from app.data.f1_data import DataSourceUnavailableError, map_lap_inputs
 
     session = pace_session_factory()
     session.laps = session.laps.drop(columns=column)
@@ -326,7 +326,7 @@ def test_normalize_rejects_missing_required_columns(pace_session_factory, column
 
 @pytest.mark.parametrize("column", ["LapNumber", "TrackStatus"])
 def test_normalize_rejects_duplicate_required_columns(pace_session_factory, column):
-    from app.f1_data import DataSourceUnavailableError, map_lap_inputs
+    from app.data.f1_data import DataSourceUnavailableError, map_lap_inputs
 
     session = pace_session_factory()
     session.laps = pd.concat([session.laps, session.laps[[column]]], axis=1)
@@ -336,7 +336,7 @@ def test_normalize_rejects_duplicate_required_columns(pace_session_factory, colu
 
 @pytest.mark.parametrize("numbers", [["1", "1"], ["01"], ["0"], ["VER"], [None]])
 def test_normalize_rejects_invalid_roster(pace_session_factory, numbers):
-    from app.f1_data import DataSourceUnavailableError, map_lap_inputs
+    from app.data.f1_data import DataSourceUnavailableError, map_lap_inputs
 
     session = pace_session_factory(results=pd.DataFrame({"DriverNumber": numbers}))
     with pytest.raises(DataSourceUnavailableError):
@@ -345,7 +345,7 @@ def test_normalize_rejects_invalid_roster(pace_session_factory, numbers):
 
 @pytest.mark.parametrize("failure", ["missing", "empty", "unattributed", "no-timing"])
 def test_normalize_rejects_unusable_dataset(pace_session_factory, failure):
-    from app.f1_data import DataSourceUnavailableError, map_lap_inputs
+    from app.data.f1_data import DataSourceUnavailableError, map_lap_inputs
 
     session = pace_session_factory()
     if failure == "missing":
@@ -369,7 +369,7 @@ def test_routine_tests_block_uncontrolled_fastf1_session_access() -> None:
 
 
 def load_mapping_boundary():
-    from app.f1_data import DataSourceUnavailableError, map_session_summary
+    from app.data.f1_data import DataSourceUnavailableError, map_session_summary
 
     return DataSourceUnavailableError, map_session_summary
 
@@ -632,7 +632,7 @@ def test_map_session_summary_maps_data_availability_statuses() -> None:
 
 @pytest.fixture
 def isolated_loader(monkeypatch, tmp_path):
-    import app.f1_data as f1_data
+    import app.data.f1_data as f1_data
 
     cache_enable = Mock()
     f1_data._configure_fastf1_cache.cache_clear()

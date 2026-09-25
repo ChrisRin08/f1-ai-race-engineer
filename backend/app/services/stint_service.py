@@ -2,10 +2,10 @@
 
 from dataclasses import asdict
 
-from app import f1_data, lap_analytics, stint_analytics
-from app.pace_models import AnalyticsDriverIdentity, AnalyticsSessionContext
-from app.pace_service import DriverNotFoundError
-from app.stint_models import (
+from app.analytics import lap_analytics, stint_analytics
+from app.data import f1_data
+from app.models.pace_models import AnalyticsDriverIdentity, AnalyticsSessionContext
+from app.models.stint_models import (
     DriverTireStintAnalysisResponse,
     DriverTireStintSummary,
     ObservationalLimitations,
@@ -17,6 +17,7 @@ from app.stint_models import (
     StintSample,
     TireStintLapEvidence,
 )
+from app.services.pace_service import DriverNotFoundError
 
 
 def load_session_tire_stints(

@@ -5,12 +5,12 @@ from typing import Annotated, Literal, Self
 
 from pydantic import ConfigDict, Field, model_validator
 
-from app.lap_analytics import (
+from app.analytics.lap_analytics import (
     MINIMUM_REPRESENTATIVE_LAPS,
     DisruptiveTrackStatus,
     LapExclusionReason,
 )
-from app.models import (
+from app.models.session_models import (
     CircuitSummary,
     ContractModel,
     EventSummary,

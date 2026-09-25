@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import pytest
 
-from app.lap_analytics import SourceLap
+from app.analytics.lap_analytics import SourceLap
 
 
 def lap(order=1, **changes):
@@ -21,7 +21,7 @@ def lap(order=1, **changes):
     ],
 )
 def test_shared_classifier_first_match_preserves_all_diagnostics(changes, reason):
-    from app.lap_analytics import classify_structural_status_laps
+    from app.analytics.lap_analytics import classify_structural_status_laps
 
     source = replace(
         lap(
@@ -40,7 +40,7 @@ def test_shared_classifier_first_match_preserves_all_diagnostics(changes, reason
 
 
 def test_shared_classifier_has_no_anomaly_or_quality_pass():
-    from app.lap_analytics import classify_structural_status_laps
+    from app.analytics.lap_analytics import classify_structural_status_laps
 
     inputs = (
         lap(
@@ -61,7 +61,7 @@ def test_shared_classifier_has_no_anomaly_or_quality_pass():
 
 
 def test_shared_precedence_is_only_the_first_five_public_reasons():
-    from app.lap_analytics import (
+    from app.analytics.lap_analytics import (
         EXCLUSION_PRECEDENCE,
         STRUCTURAL_STATUS_EXCLUSION_PRECEDENCE,
         LapExclusionReason,
@@ -85,7 +85,7 @@ def test_shared_precedence_is_only_the_first_five_public_reasons():
 def test_feature_two_full_policy_and_driver_relative_sample():
     from dataclasses import asdict
 
-    from app.lap_analytics import (
+    from app.analytics.lap_analytics import (
         RACE_PACE_POLICY,
         DriverIdentity,
         SessionFieldInput,
@@ -182,14 +182,14 @@ def test_feature_two_full_policy_and_driver_relative_sample():
     ],
 )
 def test_classification_precedence(changes, reason):
-    from app.lap_analytics import classify_driver_laps
+    from app.analytics.lap_analytics import classify_driver_laps
 
     decision = classify_driver_laps((lap(**changes),))[0]
     assert decision.primary_exclusion_reason == reason
 
 
 def test_anomaly_reference_excludes_structural_and_status_laps():
-    from app.lap_analytics import classify_driver_laps
+    from app.analytics.lap_analytics import classify_driver_laps
 
     inputs = (
         lap(1, lap_time_ns=10_000_000_000, pit_in=True),
@@ -209,7 +209,7 @@ def test_anomaly_reference_excludes_structural_and_status_laps():
 
 
 def test_classification_order_and_diagnostics_are_deterministic():
-    from app.lap_analytics import classify_driver_laps
+    from app.analytics.lap_analytics import classify_driver_laps
 
     inputs = (
         lap(3, lap_number=None),
@@ -229,7 +229,7 @@ def test_classification_order_and_diagnostics_are_deterministic():
 
 @pytest.mark.parametrize("ns", [0, -1, 1, 499_999, 500_000, 500_001])
 def test_timing_boundary_through_normalized_inputs(ns):
-    from app.lap_analytics import classify_driver_laps
+    from app.analytics.lap_analytics import classify_driver_laps
 
     normalized = ns if ns >= 500_000 else None
     decision = classify_driver_laps((lap(lap_time_ns=normalized),))[0]
@@ -243,13 +243,13 @@ def test_timing_boundary_through_normalized_inputs(ns):
     [(500_000, 1), (500_001, 1), (90_000_499_999, 90_000), (90_000_500_000, 90_001)],
 )
 def test_half_up_publication(ns, expected):
-    from app.lap_analytics import publish_milliseconds
+    from app.analytics.lap_analytics import publish_milliseconds
 
     assert publish_milliseconds(ns) == expected
 
 
 def test_metrics_use_unrounded_values_and_population_deviation():
-    from app.lap_analytics import calculate_metrics
+    from app.analytics.lap_analytics import calculate_metrics
 
     # A population standard deviation of sqrt(2) seconds, not sample sqrt(2.5).
     metrics = calculate_metrics(tuple(x * 1_000_000_000 for x in (90, 91, 92, 93, 94)))
@@ -267,7 +267,7 @@ def test_metrics_use_unrounded_values_and_population_deviation():
 def test_minimum_duration_metrics_and_local_decimal_context():
     from decimal import ROUND_DOWN, Inexact, getcontext, localcontext
 
-    from app.lap_analytics import calculate_metrics
+    from app.analytics.lap_analytics import calculate_metrics
 
     with localcontext() as context:
         context.prec = 3
@@ -302,7 +302,7 @@ def test_minimum_duration_metrics_and_local_decimal_context():
 
 
 def test_population_standard_deviation_half_up_boundary():
-    from app.lap_analytics import calculate_metrics
+    from app.analytics.lap_analytics import calculate_metrics
 
     metrics = calculate_metrics((90_000_000_000,) * 3 + (90_001_000_000,) * 3)
     assert metrics.population_standard_deviation_ms == 1
@@ -316,7 +316,7 @@ def test_normalized_input_rejects_non_normalized_duration(bad):
 
 
 def field_input():
-    from app.lap_analytics import DriverIdentity, SessionFieldInput
+    from app.analytics.lap_analytics import DriverIdentity, SessionFieldInput
 
     drivers = tuple(DriverIdentity(number) for number in ("27", "10", "4", "2", "99"))
     laps = tuple(
@@ -332,7 +332,7 @@ def field_input():
 
 
 def test_field_ranking_published_ties_and_insufficiency():
-    from app.lap_analytics import analyze_session_field
+    from app.analytics.lap_analytics import analyze_session_field
 
     field = analyze_session_field(field_input())
     assert [d.driver.driver_number for d in field.drivers] == [
@@ -359,7 +359,7 @@ def test_field_ranking_published_ties_and_insufficiency():
 
 
 def test_field_repeat_and_permuted_input_order():
-    from app.lap_analytics import analyze_session_field
+    from app.analytics.lap_analytics import analyze_session_field
 
     original = field_input()
     expected = analyze_session_field(original)
@@ -378,7 +378,7 @@ def test_field_repeat_and_permuted_input_order():
 
 @pytest.mark.parametrize("count", [0, 1, 4, 5, 6])
 def test_field_minimum_sample(count):
-    from app.lap_analytics import (
+    from app.analytics.lap_analytics import (
         DriverIdentity,
         SessionFieldInput,
         analyze_session_field,
@@ -400,7 +400,7 @@ def test_pure_module_has_no_provider_or_framework_imports():
     import ast
     import inspect
 
-    import app.lap_analytics as analytics
+    import app.analytics.lap_analytics as analytics
 
     tree = ast.parse(inspect.getsource(analytics))
     imports = []

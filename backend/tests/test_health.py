@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
 import app.main as main_module
-from app.f1_data import DataSourceUnavailableError
+from app.data.f1_data import DataSourceUnavailableError
 
 
 def test_health_returns_ok(client) -> None:

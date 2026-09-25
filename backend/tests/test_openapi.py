@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.main import app
-from app.models import HealthResponse
+from app.models.session_models import HealthResponse
 
 
 @pytest.mark.parametrize(
@@ -423,7 +423,7 @@ def test_driver_stints_preserve_inherited_openapi_components():
 
 @pytest.mark.parametrize("year,valid", [(2025, True), (True, False), ("2025", False)])
 def test_shared_context_year_requires_integer(session_summary_fixture, year, valid):
-    from app.pace_models import AnalyticsSessionContext
+    from app.models.pace_models import AnalyticsSessionContext
 
     context = {
         key: session_summary_fixture[key]
@@ -452,7 +452,7 @@ def test_shared_context_year_requires_integer(session_summary_fixture, year, val
 def test_shared_event_round_requires_positive_integer_or_null(
     session_summary_fixture, number, valid
 ):
-    from app.models import EventSummary
+    from app.models.session_models import EventSummary
 
     event = dict(session_summary_fixture["event"], round_number=number)
     if valid:

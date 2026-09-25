@@ -6,22 +6,22 @@ from typing import Annotated, Literal, Self
 
 from pydantic import ConfigDict, Field, StrictBool, field_validator, model_validator
 
-from app.lap_analytics import DisruptiveTrackStatus
-from app.models import ContractModel, SourceProvenance
-from app.pace_models import (
-    AnalyticsDriverIdentity,
-    AnalyticsSessionContext,
-    DriverNumber,
-    NonNegativeInteger,
-    PositiveInteger,
-)
-from app.stint_analytics import (
+from app.analytics.lap_analytics import DisruptiveTrackStatus
+from app.analytics.stint_analytics import (
     StintAnalysisStatus,
     StintLapDisposition,
     StintLapExclusionReason,
     StintUnavailabilityReason,
     UnassignedLapReason,
 )
+from app.models.pace_models import (
+    AnalyticsDriverIdentity,
+    AnalyticsSessionContext,
+    DriverNumber,
+    NonNegativeInteger,
+    PositiveInteger,
+)
+from app.models.session_models import ContractModel, SourceProvenance
 
 
 class StintContractModel(ContractModel):

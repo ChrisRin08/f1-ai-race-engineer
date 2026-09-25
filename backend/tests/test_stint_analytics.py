@@ -5,7 +5,7 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
-from app.lap_analytics import DriverIdentity, SessionFieldInput, SourceLap
+from app.analytics.lap_analytics import DriverIdentity, SessionFieldInput, SourceLap
 
 
 def lap(number=2, **changes):
@@ -18,7 +18,7 @@ def lap(number=2, **changes):
 
 
 def construct(rows, participants=(DriverIdentity("2"),)):
-    from app.stint_analytics import construct_session_stints
+    from app.analytics.stint_analytics import construct_session_stints
 
     return construct_session_stints(SessionFieldInput(participants, tuple(rows)))
 
@@ -174,7 +174,7 @@ def test_ranges_retain_reported_age_and_invalid_timing_evidence():
 def test_construction_reuses_shared_classifier(monkeypatch):
     from unittest.mock import Mock
 
-    from app import stint_analytics
+    from app.analytics import stint_analytics
 
     shared = Mock(wraps=stint_analytics.classify_structural_status_laps)
     monkeypatch.setattr(stint_analytics, "classify_structural_status_laps", shared)
@@ -285,7 +285,7 @@ def test_duplicate_identity_is_driver_scoped_and_requires_valid_lap_number():
     ],
 )
 def test_canonical_key_ranks_each_fact_explicitly(field, values):
-    from app.stint_analytics import canonical_lap_key
+    from app.analytics.stint_analytics import canonical_lap_key
 
     rows = tuple(lap(**{field: value}) for value in values)
     assert tuple(sorted(rows[::-1], key=canonical_lap_key)) == rows
@@ -296,7 +296,7 @@ def test_canonical_key_ranks_each_fact_explicitly(field, values):
 
 
 def test_canonical_key_prioritizes_facts_in_approved_sequence():
-    from app.stint_analytics import canonical_lap_key
+    from app.analytics.stint_analytics import canonical_lap_key
 
     # Each earlier field must dominate even when every later field sorts later.
     early = dict(
@@ -349,7 +349,7 @@ def test_pure_module_has_only_approved_analytics_imports():
     import ast
     import inspect
 
-    import app.stint_analytics as analytics
+    import app.analytics.stint_analytics as analytics
 
     tree = ast.parse(inspect.getsource(analytics))
     imports = []
@@ -368,12 +368,12 @@ def test_pure_module_has_only_approved_analytics_imports():
         "math",
         "statistics",
         "scipy.stats",
-        "app.lap_analytics",
+        "app.analytics.lap_analytics",
     }
 
 
 def decisions(rows):
-    from app.stint_analytics import classify_stint_laps
+    from app.analytics.stint_analytics import classify_stint_laps
 
     return classify_stint_laps(construct(rows).drivers[0].laps)
 
@@ -450,7 +450,7 @@ def test_unassigned_remains_separate_from_every_exclusion():
 
 
 def test_feature_two_anomaly_is_not_a_stint_exclusion():
-    from app.lap_analytics import classify_driver_laps
+    from app.analytics.lap_analytics import classify_driver_laps
 
     rows = (lap(2), lap(3, lap_time_ns=180_000_000_000, tyre_life=9))
     assert classify_driver_laps(rows)[1].primary_exclusion_reason == "anomalous_pace"
@@ -471,7 +471,7 @@ def test_feature_two_anomaly_is_not_a_stint_exclusion():
     ],
 )
 def test_eligible_age_sample_uses_reported_chronology(ages, consistent, minimum):
-    from app.stint_analytics import assess_tire_age_sample
+    from app.analytics.stint_analytics import assess_tire_age_sample
 
     rows = tuple(
         lap(i + 2, tyre_life=age, source_order=100 - i) for i, age in enumerate(ages)
@@ -490,7 +490,7 @@ def test_eligible_age_sample_uses_reported_chronology(ages, consistent, minimum)
 
 
 def test_excluded_ages_do_not_corrupt_candidate_history():
-    from app.stint_analytics import assess_tire_age_sample
+    from app.analytics.stint_analytics import assess_tire_age_sample
 
     rows = (
         lap(2, tyre_life=8),
@@ -504,8 +504,11 @@ def test_excluded_ages_do_not_corrupt_candidate_history():
 
 
 def test_stint_exclusion_policy_is_exact_and_does_not_extend_feature_two():
-    from app.lap_analytics import EXCLUSION_PRECEDENCE
-    from app.stint_analytics import STINT_ANALYSIS_POLICY, StintLapExclusionReason
+    from app.analytics.lap_analytics import EXCLUSION_PRECEDENCE
+    from app.analytics.stint_analytics import (
+        STINT_ANALYSIS_POLICY,
+        StintLapExclusionReason,
+    )
 
     expected = (
         "invalid_timing",
@@ -523,7 +526,7 @@ def test_stint_exclusion_policy_is_exact_and_does_not_extend_feature_two():
 
 
 def analyze(rows, participants=(DriverIdentity("2"),)):
-    from app.stint_analytics import analyze_session_stints
+    from app.analytics.stint_analytics import analyze_session_stints
 
     return analyze_session_stints(SessionFieldInput(participants, tuple(rows)))
 
@@ -653,7 +656,10 @@ def test_inconsistent_tire_age_outranks_sample_decisive_missing_age(ages, unusab
 
 
 def sample_counts(**changes):
-    from app.stint_analytics import STINT_LAP_EXCLUSION_PRECEDENCE, StintSample
+    from app.analytics.stint_analytics import (
+        STINT_LAP_EXCLUSION_PRECEDENCE,
+        StintSample,
+    )
 
     values = dict(
         total_lap_count=0,
@@ -781,8 +787,8 @@ def test_age_failure_blocks_whole_stint_without_rewriting_lap_decisions(ages, re
 def test_absent_and_malformed_source_age_share_sample_decisive_meaning(
     pace_session_factory, raw_age, valid
 ):
-    from app.f1_data import map_lap_inputs
-    from app.stint_analytics import analyze_session_stints
+    from app.analytics.stint_analytics import analyze_session_stints
+    from app.data.f1_data import map_lap_inputs
 
     session = pace_session_factory()
     session.laps = session.laps.iloc[:6].copy()
@@ -830,7 +836,7 @@ def test_higher_metadata_tiers_skip_age_validation_but_keep_counts(
 ):
     from unittest.mock import Mock
 
-    from app import stint_analytics
+    from app.analytics import stint_analytics
 
     rows = stint_rows()
     reason = "inconsistent_stint_metadata"
@@ -868,7 +874,10 @@ def test_higher_metadata_tiers_skip_age_validation_but_keep_counts(
 
 
 def test_availability_policy_has_six_tiers_and_seven_reasons():
-    from app.stint_analytics import STINT_ANALYSIS_POLICY, StintUnavailabilityReason
+    from app.analytics.stint_analytics import (
+        STINT_ANALYSIS_POLICY,
+        StintUnavailabilityReason,
+    )
 
     tiers = (
         frozenset(("inconsistent_stint_metadata",)),
@@ -901,14 +910,14 @@ def test_analysis_preserves_roster_and_is_permutation_deterministic():
 
 # T019–T021: estimation starts only after complete qualification.
 def qualified(rows):
-    from app.stint_analytics import _qualify_stint, classify_stint_laps
+    from app.analytics.stint_analytics import _qualify_stint, classify_stint_laps
 
     (stint,) = construct(rows).drivers[0].stints
     return _qualify_stint(stint, classify_stint_laps(stint.laps))
 
 
 def estimator_sample(rows):
-    from app.stint_analytics import _build_validated_estimator_sample
+    from app.analytics.stint_analytics import _build_validated_estimator_sample
 
     return _build_validated_estimator_sample(qualified(rows))
 
@@ -932,7 +941,7 @@ def test_estimator_signed_slopes(step):
 def test_estimator_keeps_extreme_eligible_outlier(monkeypatch):
     from unittest.mock import Mock
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     rows = timed_rows(
         range(8, 15), [90_000_000_000 + i * 250_000_000 for i in range(7)]
@@ -952,7 +961,7 @@ def test_estimator_joint_line_and_median_residual(monkeypatch):
     from dataclasses import asdict
     from unittest.mock import Mock
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     # Pairwise median slope is 1.5; joint intercept is 88.25, separate 88.75.
     # Absolute joint residuals: .25, .25, 1.25, .25, 1.75, 2.75 => median .75.
@@ -974,7 +983,7 @@ def test_estimator_joint_line_and_median_residual(monkeypatch):
 def test_estimator_uses_reported_ages_and_unrounded_nanoseconds(monkeypatch):
     from unittest.mock import Mock
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     ages = (8, 10, 13, 17, 22, 28)
     durations = tuple(90_000_000_001 + age * 500_100 for age in ages)
@@ -997,7 +1006,7 @@ def test_estimator_publication_half_up_isolated_context(value, expected):
     from decimal import ROUND_DOWN, Inexact, localcontext
     from math import copysign
 
-    from app.stint_analytics import _publish_metric
+    from app.analytics.stint_analytics import _publish_metric
 
     with localcontext() as context:
         context.prec = 2
@@ -1012,7 +1021,7 @@ def test_estimator_publication_half_up_isolated_context(value, expected):
 def test_estimator_residual_uses_unrounded_line(monkeypatch):
     from types import SimpleNamespace
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     # Rounding this slope before prediction gives a large, false residual.
     rows = timed_rows(
@@ -1033,7 +1042,7 @@ def test_estimator_residual_uses_unrounded_line(monkeypatch):
 def test_estimator_rejects_nonfinite_library_output(monkeypatch, field, value):
     from types import SimpleNamespace
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     values = {"slope": 0.0, "intercept": 90.0, field: value}
     monkeypatch.setattr(
@@ -1046,7 +1055,7 @@ def test_estimator_rejects_nonfinite_library_output(monkeypatch, field, value):
 def test_estimator_rejects_nonfinite_predictions(monkeypatch):
     from types import SimpleNamespace
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     monkeypatch.setattr(
         analytics,
@@ -1079,7 +1088,7 @@ def test_estimator_boundary_rejects_every_unavailable_outcome(
 ):
     from unittest.mock import Mock
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     spy = Mock(side_effect=AssertionError("Unavailable stint reached estimator"))
     scipy_spy = Mock(side_effect=AssertionError("Unavailable stint reached SciPy"))
@@ -1097,7 +1106,7 @@ def test_estimator_boundary_rejects_every_unavailable_outcome(
 
 
 def test_estimator_contract_rejects_broad_objects_and_sample_is_frozen():
-    from app.stint_analytics import (
+    from app.analytics.stint_analytics import (
         _build_validated_estimator_sample,
         _estimate_stint_trend,
     )
@@ -1167,7 +1176,7 @@ def test_estimator_final_residual_cannot_be_negative():
 
 @pytest.mark.parametrize("ages", [(8, 9, 10, 11, 12), (8, 9, 10, 11, 12, 12), (8,) * 6])
 def test_estimator_sample_requires_six_observations_and_distinct_ages(ages):
-    from app.stint_analytics import _build_validated_estimator_sample
+    from app.analytics.stint_analytics import _build_validated_estimator_sample
 
     rows = timed_rows(ages, [90_000_000_000] * len(ages))
     with pytest.raises(ValueError):
@@ -1180,7 +1189,7 @@ def test_estimator_sample_requires_six_observations_and_distinct_ages(ages):
 def test_estimator_input_representation_guard_precedes_scipy(monkeypatch, case):
     from unittest.mock import Mock
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     if case == "age_overflow":
         rows = timed_rows([10**400 + i for i in range(6)], [90_000_000_000] * 6)
@@ -1198,7 +1207,7 @@ def test_estimator_input_representation_guard_precedes_scipy(monkeypatch, case):
 def test_estimator_guards_nonfinite_residual_with_finite_prediction(monkeypatch):
     from types import SimpleNamespace
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     rows = timed_rows(range(8, 14), [10**317] * 6)
     monkeypatch.setattr(
@@ -1213,7 +1222,7 @@ def test_estimator_guards_nonfinite_residual_with_finite_prediction(monkeypatch)
 def test_estimator_residual_publication_half_up_after_median(monkeypatch):
     from types import SimpleNamespace
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     # Exactly representable 0.0625 tests a residual publication midpoint.
     rows = timed_rows(range(8, 14), [90_062_500_000] * 6)
@@ -1255,7 +1264,7 @@ def test_estimator_canonical_content_repeats_permutations_and_multiplicity(
     from random import Random
     from unittest.mock import Mock
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     valid = timed_rows(
         (8, 10, 13, 17, 22, 28),
@@ -1318,7 +1327,7 @@ def qualification_facts(qualification):
 def test_fabricated_qualification_rejected_before_estimator_input(monkeypatch, case):
     from unittest.mock import Mock
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     original = qualified(stint_rows() + (lap(20, pit_in=True),))
     facts = qualification_facts(original)
@@ -1368,7 +1377,7 @@ def test_fabricated_qualification_rejected_before_estimator_input(monkeypatch, c
 def test_fabricated_available_sample_cannot_substitute_audit_rows(monkeypatch):
     from unittest.mock import Mock
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     class WrongSample(analytics.StintQualification):
         @property
@@ -1390,7 +1399,7 @@ def test_locally_valid_direct_qualification_has_no_canonical_provenance(
 ):
     from unittest.mock import Mock
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     rows = stint_rows(7)
     if continuity_hidden:
@@ -1413,7 +1422,7 @@ def test_locally_valid_direct_qualification_has_no_canonical_provenance(
 def test_estimator_issuance_cannot_be_bypassed_by_ordinary_constructors(monkeypatch):
     from unittest.mock import Mock
 
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     canonical = qualified(stint_rows())
     spy = Mock(side_effect=AssertionError("Unissued sample reached SciPy"))
@@ -1432,7 +1441,7 @@ def test_estimator_issuance_cannot_be_bypassed_by_ordinary_constructors(monkeypa
 
 @pytest.mark.parametrize("compound", ["INTERMEDIATE", "WET"])
 def test_wet_qualification_retains_trusted_compound_and_audit_only(compound):
-    from app import stint_analytics as analytics
+    from app.analytics import stint_analytics as analytics
 
     canonical = qualified(stint_rows(compound=compound))
     audit = analytics.StintQualification(**qualification_facts(canonical))
