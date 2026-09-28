@@ -70,6 +70,80 @@ def pace_session_factory():
     return make_session
 
 
+@pytest.fixture
+def race_context_session_factory():
+    """Build one public-provider-shaped race-context session snapshot."""
+
+    def make_session(*, laps=None, results=None):
+        if results is None:
+            results = pd.DataFrame(
+                [
+                    {
+                        "DriverNumber": "1",
+                        "Abbreviation": "VER",
+                        "FullName": "Max Verstappen",
+                        "TeamName": "Red Bull Racing",
+                        "Position": 1.0,
+                        "ClassifiedPosition": "1",
+                        "Status": "Finished",
+                        "Laps": 53.0,
+                    },
+                    {
+                        "DriverNumber": "4",
+                        "Abbreviation": "NOR",
+                        "FullName": "Lando Norris",
+                        "TeamName": "McLaren",
+                        "Position": 2.0,
+                        "ClassifiedPosition": "2",
+                        "Status": "Finished",
+                        "Laps": 53.0,
+                    },
+                    {
+                        "DriverNumber": "27",
+                        "Abbreviation": "HUL",
+                        "FullName": "Nico Hulkenberg",
+                        "TeamName": "Kick Sauber",
+                        "Position": pd.NA,
+                        "ClassifiedPosition": "DNS",
+                        "Status": "Did not start",
+                        "Laps": 0.0,
+                    },
+                ]
+            )
+        if laps is None:
+            laps = pd.DataFrame(
+                [
+                    {
+                        "DriverNumber": "1",
+                        "LapNumber": 1.0,
+                        "Time": pd.Timedelta(90_000_000_123, unit="ns"),
+                        "Position": 1.0,
+                        "PitInTime": pd.NaT,
+                        "PitOutTime": pd.NaT,
+                        "TrackStatus": "1",
+                        "FastF1Generated": False,
+                        "Compound": "MEDIUM",
+                        "Stint": 1.0,
+                    },
+                    {
+                        "DriverNumber": "4",
+                        "LapNumber": 1.0,
+                        "Time": pd.Timedelta(91_000_000_987, unit="ns"),
+                        "Position": 2.0,
+                        "PitInTime": pd.Timedelta(89_000_000_111, unit="ns"),
+                        "PitOutTime": pd.Timedelta(90_000_000_222, unit="ns"),
+                        "TrackStatus": "1267",
+                        "FastF1Generated": False,
+                        "Compound": "HARD",
+                        "Stint": 2.0,
+                    },
+                ]
+            )
+        return SimpleNamespace(results=results, laps=laps)
+
+    return make_session
+
+
 @pytest.fixture(autouse=True)
 def block_external_fastf1_session_source(request, monkeypatch) -> None:
     if request.node.get_closest_marker("integration") is not None:

@@ -1,5 +1,7 @@
 import sqlite3
+from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
@@ -13,6 +15,438 @@ from pydantic import ValidationError
 from app.models.session_models import SessionTiming
 
 CONTROL_SOURCE_IDENTIFIERS = (2025, "Italian Grand Prix", "Race")
+
+
+def _assert_application_owned(value: object) -> None:
+    if value is None or type(value) in {str, int, bool}:
+        return
+    if isinstance(value, Enum):
+        assert value.__class__.__module__ == "app.analytics.race_context_analytics"
+        return
+    if isinstance(value, tuple):
+        for item in value:
+            _assert_application_owned(item)
+        return
+    assert is_dataclass(value), f"Unexpected provider value: {type(value)!r}"
+    assert value.__class__.__module__ == "app.analytics.race_context_analytics"
+    for field in fields(value):
+        _assert_application_owned(getattr(value, field.name))
+
+
+def test_race_context_lap_input_accepts_minimum_available_values():
+    from app.analytics.race_context_analytics import (
+        NormalizedTrackStatus,
+        NormalizedTrackStatusEvidence,
+        NormalizedValue,
+        NormalizedValueState,
+        RaceContextLapRowInput,
+        TrackStatusAvailability,
+    )
+
+    row = RaceContextLapRowInput(
+        source_occurrence=1,
+        driver_number="1",
+        lap_number=NormalizedValue(NormalizedValueState.AVAILABLE, 1),
+        lap_completion_time_ns=NormalizedValue(NormalizedValueState.AVAILABLE, 0),
+        lap_completion_position=NormalizedValue(NormalizedValueState.AVAILABLE, 1),
+        pit_entry_time_ns=NormalizedValue(NormalizedValueState.AVAILABLE, 0),
+        pit_exit_time_ns=NormalizedValue(NormalizedValueState.AVAILABLE, 0),
+        track_status=NormalizedTrackStatusEvidence(
+            TrackStatusAvailability.AVAILABLE,
+            (NormalizedTrackStatus.GREEN,),
+            False,
+        ),
+        provider_generated=False,
+        reported_compound="MEDIUM",
+        reported_stint=1,
+    )
+
+    assert row.lap_number.value == 1
+    assert row.lap_completion_position.value == 1
+    assert row.lap_completion_time_ns.value == 0
+    assert row.pit_entry_time_ns.value == 0
+    assert row.pit_exit_time_ns.value == 0
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("lap_number", 0),
+        ("lap_completion_position", 0),
+        ("lap_completion_time_ns", -1),
+        ("pit_entry_time_ns", -1),
+        ("pit_exit_time_ns", -1),
+        ("lap_number", True),
+        ("lap_number", 1.0),
+    ],
+)
+def test_race_context_lap_input_rejects_invalid_available_values(field, value):
+    from app.analytics.race_context_analytics import (
+        NormalizedTrackStatus,
+        NormalizedTrackStatusEvidence,
+        NormalizedValue,
+        NormalizedValueState,
+        RaceContextLapRowInput,
+        TrackStatusAvailability,
+    )
+
+    fields = {
+        "source_occurrence": 1,
+        "driver_number": "1",
+        "lap_number": NormalizedValue(NormalizedValueState.AVAILABLE, 1),
+        "lap_completion_time_ns": NormalizedValue(NormalizedValueState.AVAILABLE, 0),
+        "lap_completion_position": NormalizedValue(NormalizedValueState.AVAILABLE, 1),
+        "pit_entry_time_ns": NormalizedValue(NormalizedValueState.AVAILABLE, 0),
+        "pit_exit_time_ns": NormalizedValue(NormalizedValueState.AVAILABLE, 0),
+        "track_status": NormalizedTrackStatusEvidence(
+            TrackStatusAvailability.AVAILABLE,
+            (NormalizedTrackStatus.GREEN,),
+            False,
+        ),
+        "provider_generated": False,
+        "reported_compound": "MEDIUM",
+        "reported_stint": 1,
+    }
+
+    with pytest.raises(ValueError):
+        fields[field] = NormalizedValue(NormalizedValueState.AVAILABLE, value)
+        RaceContextLapRowInput(**fields)
+
+
+def test_race_context_results_are_authoritative_and_keep_zero_lap_participant(
+    race_context_session_factory,
+):
+    from app.analytics.race_context_analytics import EvidenceStatus
+    from app.data.f1_data import map_race_context_inputs
+
+    session = race_context_session_factory()
+    session.laps.at[0, "DriverNumber"] = "999"
+
+    mapped = map_race_context_inputs(session)
+
+    assert [item.identity.driver_number for item in mapped.participants] == [
+        "1",
+        "4",
+        "27",
+    ]
+    nonstarter = mapped.participants[2]
+    assert nonstarter.result_evidence_status is EvidenceStatus.AVAILABLE
+    assert nonstarter.identity.abbreviation == "HUL"
+    assert nonstarter.finish_position is None
+    assert nonstarter.classified_position == "DNS"
+    assert nonstarter.classification_status == "Did not start"
+    assert nonstarter.completed_laps == 0
+    assert not any(row.driver_number == "27" for row in mapped.lap_rows)
+    assert any(row.driver_number == "999" for row in mapped.lap_rows)
+    assert mapped.unassociated_row_count == 1
+
+
+def test_race_context_participant_identity_and_classification_use_builtins(
+    race_context_session_factory,
+):
+    from app.data.f1_data import map_race_context_inputs
+
+    session = race_context_session_factory()
+    for column in ("Position", "Laps"):
+        session.results[column] = session.results[column].astype(object)
+    session.results.at[0, "Position"] = np.float64(1)
+    session.results.at[0, "Laps"] = np.int64(53)
+    mapped = map_race_context_inputs(session)
+    participant = mapped.participants[0]
+
+    assert participant.finish_position == 1
+    assert participant.completed_laps == 53
+    assert type(participant.finish_position) is int
+    assert type(participant.completed_laps) is int
+    _assert_application_owned(mapped)
+
+
+def test_race_context_duplicate_results_keep_multiplicity_and_conflict(
+    race_context_session_factory,
+):
+    from app.analytics.race_context_analytics import EvidenceStatus
+    from app.data.f1_data import map_race_context_inputs
+
+    session = race_context_session_factory()
+    duplicate = session.results.iloc[[0]].copy()
+    session.results = pd.concat([session.results, duplicate], ignore_index=True)
+    repeated = map_race_context_inputs(session).participants[0]
+    assert repeated.result_evidence_count == 2
+    assert repeated.result_evidence_status is EvidenceStatus.AVAILABLE
+    assert repeated.identity.team_name == "Red Bull Racing"
+
+    session.results.at[len(session.results) - 1, "TeamName"] = "Conflicting Team"
+    conflicting = map_race_context_inputs(session).participants[0]
+    assert conflicting.result_evidence_count == 2
+    assert conflicting.result_evidence_status is EvidenceStatus.CONFLICTING
+    assert conflicting.identity.team_name is None
+    assert conflicting.completed_laps == 53
+
+
+@pytest.mark.parametrize(
+    "column,value,field,expected_state,expected_value",
+    [
+        ("LapNumber", np.int64(2), "lap_number", "available", 2),
+        ("LapNumber", np.nan, "lap_number", "absent", None),
+        ("LapNumber", np.inf, "lap_number", "invalid", None),
+        ("LapNumber", True, "lap_number", "invalid", None),
+        (
+            "Time",
+            pd.Timedelta(90_000_000_123, unit="ns"),
+            "lap_completion_time_ns",
+            "available",
+            90_000_000_123,
+        ),
+        ("Time", pd.NaT, "lap_completion_time_ns", "absent", None),
+        ("Time", float("inf"), "lap_completion_time_ns", "invalid", None),
+        ("Time", "bad", "lap_completion_time_ns", "invalid", None),
+        ("Position", np.float64(3), "lap_completion_position", "available", 3),
+        ("Position", 1.5, "lap_completion_position", "invalid", None),
+        (
+            "PitInTime",
+            np.timedelta64(89_000_000_111, "ns"),
+            "pit_entry_time_ns",
+            "available",
+            89_000_000_111,
+        ),
+        (
+            "PitOutTime",
+            pd.Timedelta(-1, unit="ns"),
+            "pit_exit_time_ns",
+            "invalid",
+            None,
+        ),
+    ],
+)
+def test_race_context_lap_value_states_and_exact_nanoseconds(
+    race_context_session_factory,
+    column,
+    value,
+    field,
+    expected_state,
+    expected_value,
+):
+    from app.data.f1_data import map_race_context_inputs
+
+    session = race_context_session_factory()
+    session.laps[column] = session.laps[column].astype(object)
+    session.laps.at[0, column] = value
+    evidence = getattr(map_race_context_inputs(session).lap_rows[0], field)
+
+    assert evidence.state.value == expected_state
+    assert evidence.value == expected_value
+    assert evidence.value is None or type(evidence.value) is int
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (True, True),
+        (False, False),
+        (np.bool_(True), True),
+        (np.bool_(False), False),
+        (None, None),
+        (pd.NA, None),
+        (np.nan, None),
+        (1, None),
+        ("true", None),
+    ],
+)
+def test_race_context_generated_state_is_nullable_builtin_boolean(
+    race_context_session_factory, value, expected
+):
+    from app.data.f1_data import map_race_context_inputs
+
+    session = race_context_session_factory()
+    session.laps["FastF1Generated"] = session.laps["FastF1Generated"].astype(object)
+    session.laps.at[0, "FastF1Generated"] = value
+    actual = map_race_context_inputs(session).lap_rows[0].provider_generated
+    assert actual is expected
+    assert actual is None or type(actual) is bool
+
+
+def test_race_context_reported_compound_and_stint_normalization(
+    race_context_session_factory,
+):
+    from app.data.f1_data import map_race_context_inputs
+
+    session = race_context_session_factory()
+    session.laps.at[0, "Compound"] = "  mEdIuM  "
+    session.laps.at[0, "Stint"] = np.float64(3)
+    row = map_race_context_inputs(session).lap_rows[0]
+    assert row.reported_compound == "mEdIuM"
+    assert row.reported_stint == 3
+    assert type(row.reported_stint) is int
+
+
+@pytest.mark.parametrize(
+    "raw,availability,statuses,is_disrupted",
+    [
+        ("1", "available", ("green",), False),
+        ("2", "available", ("yellow",), True),
+        ("4", "available", ("safety_car",), True),
+        ("5", "available", ("red_flag",), True),
+        ("6", "available", ("virtual_safety_car",), True),
+        ("7", "available", ("virtual_safety_car_ending",), True),
+        ("121", "available", ("green", "yellow"), True),
+        ("1383", "available", ("green", "unknown"), None),
+        ("32", "available", ("unknown", "yellow"), True),
+        ("3", "available", ("unknown",), None),
+        (None, "unavailable", (), None),
+        (pd.NA, "unavailable", (), None),
+        ("", "unavailable", (), None),
+        ("bad", "unavailable", (), None),
+        (1, "unavailable", (), None),
+    ],
+)
+def test_race_context_track_status_normalization_and_disruption_truth_table(
+    race_context_session_factory, raw, availability, statuses, is_disrupted
+):
+    from app.analytics.race_context_analytics import NormalizedTrackStatus
+    from app.data.f1_data import map_race_context_inputs
+
+    session = race_context_session_factory()
+    session.laps["TrackStatus"] = session.laps["TrackStatus"].astype(object)
+    session.laps.at[0, "TrackStatus"] = raw
+    evidence = map_race_context_inputs(session).lap_rows[0].track_status
+
+    assert evidence.availability.value == availability
+    assert tuple(status.value for status in evidence.statuses) == statuses
+    assert evidence.is_disrupted is is_disrupted
+    assert all(type(status) is NormalizedTrackStatus for status in evidence.statuses)
+
+
+def test_race_context_preserves_every_lap_row_occurrence(
+    race_context_session_factory,
+):
+    from app.data.f1_data import map_race_context_inputs
+
+    session = race_context_session_factory()
+    duplicate = session.laps.iloc[[1]].copy()
+    session.laps = pd.concat([session.laps, duplicate, duplicate], ignore_index=True)
+    session.laps.index = [9] * len(session.laps)
+    mapped = map_race_context_inputs(session)
+
+    assert len(mapped.lap_rows) == len(session.laps) == 4
+    assert [row.source_occurrence for row in mapped.lap_rows] == [1, 2, 3, 4]
+    for field in fields(mapped.lap_rows[1]):
+        if field.name == "source_occurrence":
+            continue
+        assert getattr(mapped.lap_rows[1], field.name) == getattr(
+            mapped.lap_rows[2], field.name
+        )
+        assert getattr(mapped.lap_rows[1], field.name) == getattr(
+            mapped.lap_rows[3], field.name
+        )
+
+
+@pytest.mark.parametrize(
+    "table,column",
+    [
+        ("results", "DriverNumber"),
+        ("results", "Status"),
+        ("laps", "DriverNumber"),
+        ("laps", "Time"),
+        ("laps", "TrackStatus"),
+    ],
+)
+def test_race_context_rejects_duplicate_consumed_labels(
+    race_context_session_factory, table, column
+):
+    from app.data.f1_data import DataSourceUnavailableError, map_race_context_inputs
+
+    session = race_context_session_factory()
+    source = getattr(session, table)
+    setattr(session, table, pd.concat([source, source[[column]]], axis=1))
+    with pytest.raises(DataSourceUnavailableError, match="columns are ambiguous"):
+        map_race_context_inputs(session)
+
+
+def test_race_context_optional_missing_lap_columns_remain_explicit(
+    race_context_session_factory,
+):
+    from app.analytics.race_context_analytics import NormalizedValueState
+    from app.data.f1_data import map_race_context_inputs
+
+    session = race_context_session_factory(laps=pd.DataFrame([{"DriverNumber": "1"}]))
+    row = map_race_context_inputs(session).lap_rows[0]
+
+    assert row.driver_number == "1"
+    assert row.lap_number.state is NormalizedValueState.ABSENT
+    assert row.lap_completion_time_ns.state is NormalizedValueState.ABSENT
+    assert row.lap_completion_position.state is NormalizedValueState.ABSENT
+    assert row.pit_entry_time_ns.state is NormalizedValueState.ABSENT
+    assert row.pit_exit_time_ns.state is NormalizedValueState.ABSENT
+    assert row.track_status.availability.value == "unavailable"
+    assert row.provider_generated is None
+    assert row.reported_compound is None
+    assert row.reported_stint is None
+
+
+def test_race_context_empty_laps_preserve_authoritative_roster(
+    race_context_session_factory,
+):
+    from app.data.f1_data import map_race_context_inputs
+
+    mapped = map_race_context_inputs(race_context_session_factory(laps=pd.DataFrame()))
+    assert len(mapped.participants) == 3
+    assert mapped.lap_rows == ()
+    assert mapped.unassociated_row_count == 0
+
+
+def test_race_context_preserves_nonnumeric_authoritative_identity(
+    race_context_session_factory,
+):
+    from app.data.f1_data import map_race_context_inputs
+
+    session = race_context_session_factory()
+    session.results.at[0, "DriverNumber"] = "RESERVE"
+    session.laps.at[0, "DriverNumber"] = "RESERVE"
+    mapped = map_race_context_inputs(session)
+
+    assert mapped.participants[0].identity.driver_number == "RESERVE"
+    assert mapped.lap_rows[0].driver_number == "RESERVE"
+    assert mapped.unassociated_row_count == 0
+
+
+def test_race_context_mapper_is_pure_over_one_supplied_snapshot(
+    race_context_session_factory, monkeypatch
+):
+    from app.data import f1_data
+
+    session = race_context_session_factory()
+    loader = Mock(side_effect=AssertionError("Mapper must not reacquire the source"))
+    monkeypatch.setattr(f1_data, "load_session", loader)
+
+    first = f1_data.map_race_context_inputs(session)
+    second = f1_data.map_race_context_inputs(session)
+
+    assert first == second
+    loader.assert_not_called()
+
+
+def test_race_context_inputs_are_frozen_and_provider_free(
+    race_context_session_factory,
+):
+    from app.data.f1_data import map_race_context_inputs
+
+    mapped = map_race_context_inputs(race_context_session_factory())
+    _assert_application_owned(mapped)
+    with pytest.raises(FrozenInstanceError):
+        mapped.unassociated_row_count = 99
+
+
+@pytest.mark.parametrize("driver_number", [None, pd.NA, "", "   ", 1, []])
+def test_race_context_rejects_unusable_authoritative_identity(
+    race_context_session_factory, driver_number
+):
+    from app.data.f1_data import DataSourceUnavailableError, map_race_context_inputs
+
+    session = race_context_session_factory()
+    session.results["DriverNumber"] = session.results["DriverNumber"].astype(object)
+    session.results.at[0, "DriverNumber"] = driver_number
+    with pytest.raises(DataSourceUnavailableError, match="participant identity"):
+        map_race_context_inputs(session)
 
 
 @pytest.mark.parametrize(

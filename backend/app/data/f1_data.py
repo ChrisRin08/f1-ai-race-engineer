@@ -8,6 +8,7 @@ from numbers import Real
 from pathlib import Path
 
 import fastf1
+import numpy as np
 import pandas as pd
 from fastf1.core import Session
 from fastf1.exceptions import DataNotLoadedError, RateLimitExceededError
@@ -17,6 +18,18 @@ from app.analytics.lap_analytics import (
     DriverIdentity,
     SessionFieldInput,
     SourceLap,
+)
+from app.analytics.race_context_analytics import (
+    EvidenceStatus,
+    NormalizedTrackStatus,
+    NormalizedTrackStatusEvidence,
+    NormalizedValue,
+    NormalizedValueState,
+    RaceContextInput,
+    RaceContextLapRowInput,
+    RaceContextParticipantIdentity,
+    RaceContextParticipantInput,
+    TrackStatusAvailability,
 )
 from app.models.session_models import (
     AvailabilityStatus,
@@ -31,6 +44,50 @@ from app.models.session_models import (
 )
 
 FASTF1_CACHE_DIR = Path(__file__).resolve().parents[2] / "cache" / "fastf1"
+
+_RACE_CONTEXT_RESULT_COLUMNS = frozenset(
+    {
+        "DriverNumber",
+        "Abbreviation",
+        "FullName",
+        "TeamName",
+        "Position",
+        "ClassifiedPosition",
+        "Status",
+        "Laps",
+    }
+)
+_RACE_CONTEXT_LAP_COLUMNS = frozenset(
+    {
+        "DriverNumber",
+        "LapNumber",
+        "Time",
+        "Position",
+        "PitInTime",
+        "PitOutTime",
+        "TrackStatus",
+        "FastF1Generated",
+        "Compound",
+        "Stint",
+    }
+)
+_TRACK_STATUS_BY_CODE = {
+    "1": NormalizedTrackStatus.GREEN,
+    "2": NormalizedTrackStatus.YELLOW,
+    "4": NormalizedTrackStatus.SAFETY_CAR,
+    "5": NormalizedTrackStatus.RED_FLAG,
+    "6": NormalizedTrackStatus.VIRTUAL_SAFETY_CAR,
+    "7": NormalizedTrackStatus.VIRTUAL_SAFETY_CAR_ENDING,
+}
+_DISRUPTED_TRACK_STATUSES = frozenset(
+    {
+        NormalizedTrackStatus.YELLOW,
+        NormalizedTrackStatus.SAFETY_CAR,
+        NormalizedTrackStatus.RED_FLAG,
+        NormalizedTrackStatus.VIRTUAL_SAFETY_CAR,
+        NormalizedTrackStatus.VIRTUAL_SAFETY_CAR_ENDING,
+    }
+)
 
 
 class DataSourceUnavailableError(RuntimeError):
@@ -212,6 +269,262 @@ def map_lap_inputs(session: Session) -> SessionFieldInput:
     ):
         raise DataSourceUnavailableError("No usable participant-linked lap timing.")
     return SessionFieldInput(tuple(participants), tuple(laps))
+
+
+def map_race_context_inputs(session: Session) -> RaceContextInput:
+    """Normalize one loaded public session snapshot for future pure analytics."""
+    results = _required_results(session)
+    if not isinstance(results, pd.DataFrame):
+        raise DataSourceUnavailableError("Required session results are unavailable.")
+    _reject_duplicate_consumed_columns(results, _RACE_CONTEXT_RESULT_COLUMNS)
+    participants = _map_race_context_participants(results)
+
+    laps = _optional_loaded_value(session, "laps")
+    if not isinstance(laps, pd.DataFrame):
+        raise DataSourceUnavailableError("Required session laps are unavailable.")
+    _reject_duplicate_consumed_columns(laps, _RACE_CONTEXT_LAP_COLUMNS)
+    rows, unassociated_count = _map_race_context_lap_rows(
+        laps,
+        frozenset(item.identity.driver_number for item in participants),
+    )
+    return RaceContextInput(participants, rows, unassociated_count)
+
+
+def _map_race_context_participants(
+    results: pd.DataFrame,
+) -> tuple[RaceContextParticipantInput, ...]:
+    grouped: dict[
+        str,
+        list[dict[str, tuple[NormalizedValueState, object | None]]],
+    ] = {}
+    for _, row in results.iterrows():
+        driver_number = _normalized_authoritative_identity(row.get("DriverNumber"))
+        if driver_number is None:
+            raise DataSourceUnavailableError(
+                "Invalid authoritative participant identity."
+            )
+        facts = {
+            "abbreviation": _normalized_text_evidence(row.get("Abbreviation")),
+            "full_name": _normalized_text_evidence(row.get("FullName")),
+            "team_name": _normalized_text_evidence(row.get("TeamName")),
+            "finish_position": _normalized_integer_fact(row.get("Position")),
+            "classified_position": _normalized_text_evidence(
+                row.get("ClassifiedPosition")
+            ),
+            "classification_status": _normalized_text_evidence(row.get("Status")),
+            "completed_laps": _normalized_integer_fact(
+                row.get("Laps"), allow_zero=True
+            ),
+        }
+        grouped.setdefault(driver_number, []).append(facts)
+
+    participants = []
+    for driver_number, records in grouped.items():
+        conflicts = {
+            field: len({record[field] for record in records}) > 1
+            for field in records[0]
+        }
+        has_conflict = any(conflicts.values())
+        has_invalid = any(
+            state is NormalizedValueState.INVALID
+            for record in records
+            for state, _ in record.values()
+        )
+        if has_conflict:
+            evidence_status = EvidenceStatus.CONFLICTING
+        elif has_invalid:
+            evidence_status = EvidenceStatus.UNAVAILABLE
+        else:
+            evidence_status = EvidenceStatus.AVAILABLE
+
+        def resolved(field: str) -> object | None:
+            if conflicts[field]:
+                return None
+            return records[0][field][1]
+
+        participants.append(
+            RaceContextParticipantInput(
+                identity=RaceContextParticipantIdentity(
+                    driver_number=driver_number,
+                    abbreviation=resolved("abbreviation"),
+                    full_name=resolved("full_name"),
+                    team_name=resolved("team_name"),
+                ),
+                result_evidence_count=len(records),
+                result_evidence_status=evidence_status,
+                finish_position=resolved("finish_position"),
+                classified_position=resolved("classified_position"),
+                classification_status=resolved("classification_status"),
+                completed_laps=resolved("completed_laps"),
+            )
+        )
+    return tuple(participants)
+
+
+def _map_race_context_lap_rows(
+    laps: pd.DataFrame,
+    participant_numbers: frozenset[str],
+) -> tuple[tuple[RaceContextLapRowInput, ...], int]:
+    rows = []
+    unassociated_count = 0
+    for source_occurrence, (_, row) in enumerate(laps.iterrows(), 1):
+        driver_number = _normalized_authoritative_identity(row.get("DriverNumber"))
+        if driver_number not in participant_numbers:
+            unassociated_count += 1
+        rows.append(
+            RaceContextLapRowInput(
+                source_occurrence=source_occurrence,
+                driver_number=driver_number,
+                lap_number=_normalized_integer_evidence(row.get("LapNumber")),
+                lap_completion_time_ns=_normalized_timestamp_evidence(row.get("Time")),
+                lap_completion_position=_normalized_integer_evidence(
+                    row.get("Position")
+                ),
+                pit_entry_time_ns=_normalized_timestamp_evidence(row.get("PitInTime")),
+                pit_exit_time_ns=_normalized_timestamp_evidence(row.get("PitOutTime")),
+                track_status=_normalized_track_status(row.get("TrackStatus")),
+                provider_generated=_normalized_boolean(row.get("FastF1Generated")),
+                reported_compound=_normalized_optional_text(row.get("Compound")),
+                reported_stint=_normalized_optional_positive_integer(row.get("Stint")),
+            )
+        )
+    return tuple(rows), unassociated_count
+
+
+def _reject_duplicate_consumed_columns(
+    table: pd.DataFrame, consumed: frozenset[str]
+) -> None:
+    duplicated = consumed.intersection(
+        table.columns[table.columns.duplicated()].tolist()
+    )
+    if duplicated:
+        raise DataSourceUnavailableError("Consumed provider columns are ambiguous.")
+
+
+def _normalized_text_evidence(
+    value: object,
+) -> tuple[NormalizedValueState, str | None]:
+    if _is_missing_provider_scalar(value):
+        return NormalizedValueState.ABSENT, None
+    normalized = _normalize_missing(value)
+    if type(normalized) is not str:
+        return NormalizedValueState.INVALID, None
+    text = normalized.strip()
+    if not text:
+        return NormalizedValueState.ABSENT, None
+    return NormalizedValueState.AVAILABLE, text
+
+
+def _normalized_integer_fact(
+    value: object, *, allow_zero: bool = False
+) -> tuple[NormalizedValueState, int | None]:
+    if _is_missing_provider_scalar(value):
+        return NormalizedValueState.ABSENT, None
+    normalized = _normalize_missing(value)
+    minimum = 0 if allow_zero else 1
+    if (
+        isinstance(normalized, bool)
+        or not isinstance(normalized, Real)
+        or not isfinite(normalized)
+        or normalized < minimum
+        or int(normalized) != normalized
+    ):
+        return NormalizedValueState.INVALID, None
+    return NormalizedValueState.AVAILABLE, int(normalized)
+
+
+def _normalized_integer_evidence(
+    value: object, *, allow_zero: bool = False
+) -> NormalizedValue:
+    state, normalized = _normalized_integer_fact(value, allow_zero=allow_zero)
+    return NormalizedValue(state, normalized)
+
+
+def _normalized_timestamp_evidence(value: object) -> NormalizedValue:
+    if _is_missing_provider_scalar(value):
+        return NormalizedValue(NormalizedValueState.ABSENT)
+    if not isinstance(value, (pd.Timedelta, timedelta, np.timedelta64)):
+        return NormalizedValue(NormalizedValueState.INVALID)
+    try:
+        nanoseconds = int(pd.Timedelta(value).value)
+    except (TypeError, ValueError, OverflowError):
+        return NormalizedValue(NormalizedValueState.INVALID)
+    if nanoseconds < 0:
+        return NormalizedValue(NormalizedValueState.INVALID)
+    return NormalizedValue(NormalizedValueState.AVAILABLE, nanoseconds)
+
+
+def _normalized_authoritative_identity(value: object) -> str | None:
+    value = _normalize_missing(value)
+    if type(value) is not str:
+        return None
+    identity = value.strip()
+    return identity or None
+
+
+def _normalized_boolean(value: object) -> bool | None:
+    value = _normalize_missing(value)
+    return value if type(value) is bool else None
+
+
+def _normalized_optional_text(value: object) -> str | None:
+    state, normalized = _normalized_text_evidence(value)
+    if state is not NormalizedValueState.AVAILABLE:
+        return None
+    return normalized
+
+
+def _normalized_optional_positive_integer(value: object) -> int | None:
+    state, normalized = _normalized_integer_fact(value)
+    if state is not NormalizedValueState.AVAILABLE:
+        return None
+    return normalized
+
+
+def _normalized_track_status(value: object) -> NormalizedTrackStatusEvidence:
+    if _is_missing_provider_scalar(value):
+        return NormalizedTrackStatusEvidence(
+            TrackStatusAvailability.UNAVAILABLE,
+            (),
+            None,
+        )
+    value = _normalize_missing(value)
+    if type(value) is not str or re.fullmatch(r"[0-9]+", value) is None:
+        return NormalizedTrackStatusEvidence(
+            TrackStatusAvailability.UNAVAILABLE,
+            (),
+            None,
+        )
+
+    statuses = tuple(
+        dict.fromkeys(
+            _TRACK_STATUS_BY_CODE.get(code, NormalizedTrackStatus.UNKNOWN)
+            for code in value
+        )
+    )
+    if any(status in _DISRUPTED_TRACK_STATUSES for status in statuses):
+        is_disrupted = True
+    elif NormalizedTrackStatus.UNKNOWN in statuses:
+        is_disrupted = None
+    else:
+        is_disrupted = False
+    return NormalizedTrackStatusEvidence(
+        TrackStatusAvailability.AVAILABLE,
+        statuses,
+        is_disrupted,
+    )
+
+
+def _is_missing_provider_scalar(value: object) -> bool:
+    if value is None:
+        return True
+    if not pd.api.types.is_scalar(value):
+        return False
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+    return type(missing) in {bool, np.bool_} and bool(missing)
 
 
 def _canonical_driver_number(value: object) -> str:
