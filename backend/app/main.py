@@ -26,14 +26,12 @@ from app.services.pace_service import (
     load_pace_comparison,
     load_session_pace,
 )
+from app.services.session_support import resolve_supported_session
 from app.services.stint_service import load_driver_tire_stints, load_session_tire_stints
 
 app = FastAPI(title="F1 AI Race Engineer Backend", version="0.1.0")
 
 _SESSION_SLUG_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
-_SUPPORTED_SESSIONS = {
-    (2025, "italian-grand-prix", "race"): (2025, "Italian Grand Prix", "Race")
-}
 
 
 @app.get("/health", response_model=HealthResponse, operation_id="getHealth")
@@ -52,7 +50,7 @@ def get_session_summary(
     event: Annotated[str, Path(pattern=_SESSION_SLUG_PATTERN)],
     session: Annotated[str, Path(pattern=_SESSION_SLUG_PATTERN)],
 ) -> SessionSummary | JSONResponse:
-    source_identifiers = _SUPPORTED_SESSIONS.get((year, event, session))
+    source_identifiers = resolve_supported_session(year, event, session)
     if source_identifiers is None:
         return _error_response(
             status_code=404,
@@ -82,7 +80,7 @@ def get_driver_pace(
     session: Annotated[str, Path(pattern=_SESSION_SLUG_PATTERN)],
     driver_number: Annotated[str, Path(pattern=DRIVER_NUMBER_PATTERN)],
 ) -> DriverPaceAnalysisResponse | JSONResponse:
-    source_identifiers = _SUPPORTED_SESSIONS.get((year, event, session))
+    source_identifiers = resolve_supported_session(year, event, session)
     if source_identifiers is None:
         return _error_response(
             status_code=404,
@@ -119,7 +117,7 @@ def compare_driver_pace(
     driver_a: Annotated[str, Path(pattern=DRIVER_NUMBER_PATTERN)],
     driver_b: Annotated[str, Path(pattern=DRIVER_NUMBER_PATTERN)],
 ) -> DriverPaceComparisonResponse | JSONResponse:
-    source_identifiers = _SUPPORTED_SESSIONS.get((year, event, session))
+    source_identifiers = resolve_supported_session(year, event, session)
     if source_identifiers is None:
         return _error_response(
             status_code=404,
@@ -153,7 +151,7 @@ def get_session_pace(
     event: Annotated[str, Path(pattern=_SESSION_SLUG_PATTERN)],
     session: Annotated[str, Path(pattern=_SESSION_SLUG_PATTERN)],
 ) -> SessionPaceAnalysisResponse | JSONResponse:
-    source_identifiers = _SUPPORTED_SESSIONS.get((year, event, session))
+    source_identifiers = resolve_supported_session(year, event, session)
     if source_identifiers is None:
         return _error_response(
             status_code=404,
@@ -183,7 +181,7 @@ def get_driver_tire_stints(
     session: Annotated[str, Path(pattern=_SESSION_SLUG_PATTERN)],
     driver_number: Annotated[str, Path(pattern=DRIVER_NUMBER_PATTERN)],
 ) -> DriverTireStintAnalysisResponse | JSONResponse:
-    source_identifiers = _SUPPORTED_SESSIONS.get((year, event, session))
+    source_identifiers = resolve_supported_session(year, event, session)
     if source_identifiers is None:
         return _error_response(
             status_code=404,
@@ -217,7 +215,7 @@ def get_session_tire_stints(
     event: Annotated[str, Path(pattern=_SESSION_SLUG_PATTERN)],
     session: Annotated[str, Path(pattern=_SESSION_SLUG_PATTERN)],
 ) -> SessionTireStintAnalysisResponse | JSONResponse:
-    source_identifiers = _SUPPORTED_SESSIONS.get((year, event, session))
+    source_identifiers = resolve_supported_session(year, event, session)
     if source_identifiers is None:
         return _error_response(
             status_code=404,
