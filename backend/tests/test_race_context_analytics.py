@@ -1,10 +1,11 @@
 import ast
 import inspect
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, fields, replace
 from itertools import permutations
 
 import pytest
 
+import app.analytics.race_context_analytics as race_analytics
 from app.analytics.race_context_analytics import (
     EqualDistanceTimeDeficitStatus,
     EvidenceStatus,
@@ -2032,3 +2033,447 @@ def test_race_context_analytics_imports_only_provider_independent_modules():
     assert imported_roots.isdisjoint(
         {"fastf1", "pandas", "numpy", "fastapi", "pydantic", "app"}
     )
+
+
+def _session_fixture():
+    rows = (
+        _row("4", 1, pit_exit_time_ns=1_000_000),
+        _row("4", 2, pit_entry_time_ns=2_000_000),
+        _row("4", 2, pit_entry_time_ns=2_000_000, source_occurrence=2),
+        _row("4", 3, pit_exit_time_ns=3_000_000),
+        _row("4", 4, pit_entry_time_ns=4_000_000),
+        _row("4", 4, pit_entry_time_ns=5_000_000),
+        _row("4", 4, pit_entry_time_ns=5_000_000, source_occurrence=3),
+        _row("4", 5, pit_entry_time_ns=6_000_000, provider_generated=True),
+        _row("4", 6, pit_entry_time_ns=7_000_000),
+        _row("10", None, pit_entry_time_ns=8_000_000, pit_exit_time_ns=9_000_000),
+        _row("10", None, pit_entry_time_ns=8_000_000, pit_exit_time_ns=9_000_000),
+        _row("99", 1, pit_entry_time_ns=1_000_000),
+        _row("1", 1, completion_position=1),
+    )
+    participants = (
+        _participant("Z"),
+        replace(
+            _participant("2"),
+            identity=RaceContextParticipantIdentity("2", "DNS", "Non Starter", "Team"),
+            classified_position="N",
+            classification_status="Did not start",
+            completed_laps=0,
+        ),
+        _participant("10"),
+        _participant("4"),
+        _participant("A"),
+        _participant("1"),
+    )
+    return RaceContextInput(participants, rows, unassociated_row_count=1)
+
+
+def test_central_session_contains_exactly_the_authoritative_roster():
+    snapshot = _session_fixture()
+    result = race_analytics.analyze_race_context(snapshot)
+
+    assert isinstance(result, race_analytics.SessionRaceContextAnalysis)
+    assert [field.name for field in fields(result)] == ["participants"]
+    assert tuple(item.identity.driver_number for item in result.participants) == (
+        "1",
+        "2",
+        "4",
+        "10",
+        "A",
+        "Z",
+    )
+    assert len(result.participants) == len(snapshot.participants)
+    assert len({item.identity.driver_number for item in result.participants}) == 6
+    assert all(
+        isinstance(item, race_analytics.ParticipantRaceContextAnalysis)
+        for item in result.participants
+    )
+    assert [field.name for field in fields(result.participants[0])] == [
+        "identity",
+        "classification",
+        "latest_lap_context",
+        "pit_evidence_counts",
+        "lap_contexts",
+        "pit_evidence",
+        "unassociated_evidence_count",
+    ]
+    with pytest.raises(FrozenInstanceError):
+        result.participants = ()
+    with pytest.raises(FrozenInstanceError):
+        result.participants[0].latest_lap_context = None
+
+
+def test_central_zero_evidence_participant_preserves_identity_and_classification():
+    snapshot = _session_fixture()
+    item = race_analytics.analyze_race_context(snapshot).participants[1]
+    source = next(p for p in snapshot.participants if p.identity.driver_number == "2")
+
+    assert item.identity is source.identity
+    assert item.classification.evidence_status is EvidenceStatus.AVAILABLE
+    assert item.classification.source_evidence_count == 1
+    assert item.classification.finish_position is None
+    assert item.classification.classified_position == "N"
+    assert item.classification.status == "Did not start"
+    assert item.classification.completed_laps == 0
+    assert item.latest_lap_context is None
+    assert item.lap_contexts == item.pit_evidence == ()
+    assert item.pit_evidence_counts == race_analytics.PitEvidenceCounts(
+        0, 0, 0, 0, 0, 0
+    )
+    assert item.unassociated_evidence_count == 0
+
+
+@pytest.mark.parametrize("status", tuple(EvidenceStatus))
+def test_central_classification_is_copied_without_lap_inference(status):
+    source = replace(
+        _participant("4"),
+        result_evidence_status=status,
+        result_evidence_count=3,
+        finish_position=12,
+        classified_position="R",
+        classification_status="Retired",
+        completed_laps=None,
+    )
+    snapshot = RaceContextInput((source,), (_row("4", 53, completion_position=1),), 0)
+    classification = (
+        race_analytics.analyze_race_context(snapshot).participants[0].classification
+    )
+
+    assert classification == race_analytics.RaceClassificationContext(
+        status, 3, 12, "R", "Retired", None
+    )
+
+
+@pytest.mark.parametrize(
+    "later_rows,expected_lap",
+    [
+        ((_row("4", 2, completion_time_ns=20_000_000),), 2),
+        ((_row("4", 2, provider_generated=True),), 1),
+        ((_row("4", 2, provider_generated=None),), 1),
+        ((_row("4", 2, completion_time_ns=None),), 1),
+        (
+            (
+                replace(
+                    _row("4", 2),
+                    lap_completion_time_ns=NormalizedValue(
+                        NormalizedValueState.INVALID
+                    ),
+                ),
+            ),
+            1,
+        ),
+        ((_row("4", 2), _row("4", 2, completion_time_ns=30_000_000)), 1),
+        ((_row("4", 2), _row("4", 2, reported_compound="HARD")), 2),
+    ],
+)
+def test_central_latest_uses_trusted_completion_not_highest_audit_lap(
+    later_rows, expected_lap
+):
+    snapshot = _input((_row("4", 1), *later_rows))
+    item = next(
+        p
+        for p in race_analytics.analyze_race_context(snapshot).participants
+        if p.identity.driver_number == "4"
+    )
+
+    assert item.latest_lap_context.lap_number == expected_lap
+    assert item.latest_lap_context is item.lap_contexts[expected_lap - 1]
+    assert tuple(lap.lap_number for lap in item.lap_contexts) == (1, 2)
+
+
+def test_central_no_trusted_completion_has_no_latest_context():
+    snapshot = _input(
+        (
+            _row("4", 1, provider_generated=True),
+            _row("4", 2, completion_time_ns=None),
+        )
+    )
+    item = race_analytics.analyze_race_context(snapshot).participants[1]
+    assert item.latest_lap_context is None
+    assert len(item.lap_contexts) == 2
+
+
+def test_central_reuses_complete_lap_and_pit_series_and_counts_items():
+    snapshot = _session_fixture()
+    result = race_analytics.analyze_race_context(snapshot)
+    laps = analyze_lap_contexts(snapshot)
+    for item in result.participants:
+        number = item.identity.driver_number
+        assert item.lap_contexts == tuple(
+            lap for lap in laps.lap_contexts if lap.driver_number == number
+        )
+        assert item.pit_evidence == analyze_pit_evidence(
+            snapshot, laps.lap_contexts, number
+        )
+    item = result.participants[2]
+    assert item.pit_evidence_counts == race_analytics.PitEvidenceCounts(
+        1, 1, 1, 1, 1, 5
+    )
+    conflict = next(
+        e for e in item.pit_evidence if e.state is PitEvidenceState.CONFLICTING
+    )
+    assert conflict.source_boundary_count == 3
+    assert item.pit_evidence_counts.conflicting == 1
+    complete = next(
+        e for e in item.pit_evidence if e.state is PitEvidenceState.COMPLETE
+    )
+    assert complete.source_boundary_count == 3
+    assert item.pit_evidence_counts.complete == 1
+    assert item.pit_evidence_counts.total == len(item.pit_evidence)
+    assert sum(e.source_boundary_count for e in item.pit_evidence) == 9
+
+
+def test_central_invalid_identity_counts_rows_once_and_excludes_roster_orphans():
+    result = race_analytics.analyze_race_context(_session_fixture())
+    assert [p.unassociated_evidence_count for p in result.participants] == [
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+    ]
+    invalid_only = result.participants[3]
+    assert invalid_only.latest_lap_context is None
+    assert invalid_only.lap_contexts == invalid_only.pit_evidence == ()
+    assert invalid_only.pit_evidence_counts.total == 0
+    assert all(p.identity.driver_number != "99" for p in result.participants)
+
+
+@pytest.mark.parametrize(
+    "counts",
+    [
+        (-1, 0, 0, 0, 0, -1),
+        (0, -1, 0, 0, 0, 0),
+        (0, 0, -1, 0, 0, 0),
+        (0, 0, 0, -1, 0, 0),
+        (0, 0, 0, 0, -1, 0),
+        (0, 0, 0, 0, 0, -1),
+        (1, 0, 0, 0, 0, 0),
+    ],
+)
+def test_central_pit_count_invariants(counts):
+    with pytest.raises(ValueError):
+        race_analytics.PitEvidenceCounts(*counts)
+
+
+def test_central_participant_ownership_and_latest_membership_invariants():
+    result = race_analytics.analyze_race_context(_session_fixture())
+    owner, other = result.participants[2], result.participants[0]
+    for changes in (
+        {"lap_contexts": other.lap_contexts},
+        {"latest_lap_context": other.latest_lap_context},
+        {"lap_contexts": ()},
+        {"identity": other.identity},
+        {"unassociated_evidence_count": -1},
+    ):
+        with pytest.raises(ValueError):
+            replace(owner, **changes)
+    with pytest.raises(ValueError):
+        replace(
+            other,
+            pit_evidence=owner.pit_evidence,
+            pit_evidence_counts=owner.pit_evidence_counts,
+        )
+    with pytest.raises(ValueError):
+        replace(result, participants=(owner, owner))
+
+
+def test_central_source_permutations_and_three_identical_runs_are_equal():
+    snapshot = _session_fixture()
+    expected = race_analytics.analyze_race_context(snapshot)
+    for participants in (snapshot.participants, tuple(reversed(snapshot.participants))):
+        for rows in (
+            snapshot.lap_rows,
+            tuple(reversed(snapshot.lap_rows)),
+            snapshot.lap_rows[5:] + snapshot.lap_rows[:5],
+        ):
+            # Diagnostic ordinals also change with source order.
+            reordered = replace(
+                snapshot,
+                participants=participants,
+                lap_rows=tuple(
+                    replace(row, source_occurrence=i) for i, row in enumerate(rows, 1)
+                ),
+            )
+            assert race_analytics.analyze_race_context(reordered) == expected
+    assert [race_analytics.analyze_race_context(snapshot) for _ in range(3)] == [
+        expected,
+        expected,
+        expected,
+    ]
+
+
+def test_central_rejects_duplicate_authoritative_identity():
+    participant = _participant("4")
+    with pytest.raises(ValueError):
+        race_analytics.analyze_race_context(
+            RaceContextInput((participant, participant), (), 0)
+        )
+
+
+def test_central_derives_laps_once_from_the_supplied_snapshot(monkeypatch):
+    snapshot = _session_fixture()
+    calls = []
+    derived = []
+
+    def record_lap_analysis(supplied):
+        calls.append(supplied)
+        analysis = analyze_lap_contexts(supplied)
+        derived.extend(analysis.lap_contexts)
+        return analysis
+
+    monkeypatch.setattr(race_analytics, "analyze_lap_contexts", record_lap_analysis)
+    result = race_analytics.analyze_race_context(snapshot)
+
+    assert len(calls) == 1
+    assert calls[0] is snapshot
+    assert len(derived) == sum(len(p.lap_contexts) for p in result.participants)
+    assert all(
+        any(context is original for original in derived)
+        for participant in result.participants
+        for context in participant.lap_contexts
+    )
+
+
+def test_central_numeric_order_precedes_normalized_nonnumeric_identity_order():
+    snapshot = _input((), drivers=("Z", "10", "2", "01", "A", "1"))
+    expected = ("1", "2", "10", "01", "A", "Z")
+    for participants in permutations(snapshot.participants):
+        result = race_analytics.analyze_race_context(
+            replace(snapshot, participants=participants)
+        )
+        assert tuple(p.identity.driver_number for p in result.participants) == expected
+
+
+def test_central_disrupted_trusted_context_remains_latest():
+    snapshot = _input(
+        (
+            _row("4", 1),
+            _row(
+                "4",
+                2,
+                track_status=_track_status(
+                    NormalizedTrackStatus.YELLOW, is_disrupted=True
+                ),
+            ),
+        )
+    )
+    participant = race_analytics.analyze_race_context(snapshot).participants[1]
+    assert participant.latest_lap_context is participant.lap_contexts[1]
+    assert participant.latest_lap_context.track_status.is_disrupted is True
+
+
+def test_central_empty_roster_returns_empty_session():
+    result = race_analytics.analyze_race_context(
+        RaceContextInput((), (_row("99", 1),), 1)
+    )
+    assert result == race_analytics.SessionRaceContextAnalysis(())
+
+
+def test_central_direct_construction_rejects_missing_latest_with_trusted_laps():
+    participant = race_analytics.analyze_race_context(
+        _input((_row("4", 1), _row("4", 6)))
+    ).participants[1]
+    with pytest.raises(ValueError):
+        replace(participant, latest_lap_context=None)
+
+
+def test_central_direct_construction_rejects_stale_latest():
+    participant = race_analytics.analyze_race_context(
+        _input((_row("4", 1), _row("4", 6)))
+    ).participants[1]
+    with pytest.raises(ValueError):
+        replace(participant, latest_lap_context=participant.lap_contexts[0])
+
+
+def test_central_direct_construction_accepts_correct_latest():
+    participant = race_analytics.analyze_race_context(
+        _input((_row("4", 1), _row("4", 6)))
+    ).participants[1]
+    assert (
+        replace(participant, latest_lap_context=participant.lap_contexts[-1])
+        == participant
+    )
+    assert participant.latest_lap_context.lap_number == 6
+
+
+def test_central_direct_construction_accepts_none_without_trusted_laps():
+    participant = race_analytics.analyze_race_context(
+        _input(
+            (
+                _row("4", 1, provider_generated=True),
+                _row("4", 6, completion_time_ns=None),
+            )
+        )
+    ).participants[1]
+    assert replace(participant, latest_lap_context=None) == participant
+
+
+@pytest.mark.parametrize(
+    "later_rows,expected_lap",
+    [
+        ((_row("4", 6, provider_generated=True),), 5),
+        ((_row("4", 6, provider_generated=None),), 5),
+        (
+            (
+                replace(
+                    _row("4", 6),
+                    lap_completion_time_ns=NormalizedValue(
+                        NormalizedValueState.INVALID
+                    ),
+                ),
+            ),
+            5,
+        ),
+        ((_row("4", 6), _row("4", 6, completion_time_ns=30_000_000)), 5),
+        ((_row("4", 6), _row("4", 6, reported_compound="HARD")), 6),
+    ],
+)
+def test_central_direct_construction_latest_preserves_c1_trust(
+    later_rows, expected_lap
+):
+    participant = race_analytics.analyze_race_context(
+        _input((_row("4", 5), *later_rows))
+    ).participants[1]
+    correct = next(
+        lap for lap in participant.lap_contexts if lap.lap_number == expected_lap
+    )
+    assert replace(participant, latest_lap_context=correct) == participant
+
+
+def test_central_direct_construction_rejects_wrong_pit_state_distribution():
+    participant = race_analytics.analyze_race_context(_session_fixture()).participants[
+        2
+    ]
+    assert {item.state for item in participant.pit_evidence} == set(PitEvidenceState)
+    wrong_counts = race_analytics.PitEvidenceCounts(0, 2, 1, 1, 1, 5)
+    assert wrong_counts.total == len(participant.pit_evidence)
+    with pytest.raises(ValueError):
+        replace(participant, pit_evidence_counts=wrong_counts)
+
+
+def test_central_direct_construction_accepts_correct_pit_state_distribution():
+    participant = race_analytics.analyze_race_context(_session_fixture()).participants[
+        2
+    ]
+    correct_counts = race_analytics.PitEvidenceCounts(1, 1, 1, 1, 1, 5)
+    assert replace(participant, pit_evidence_counts=correct_counts) == participant
+    conflict = next(
+        item
+        for item in participant.pit_evidence
+        if item.state is PitEvidenceState.CONFLICTING
+    )
+    assert conflict.source_boundary_count == 3
+    assert correct_counts.conflicting == 1
+
+
+def test_central_direct_construction_rejects_wrong_pit_total():
+    participant = race_analytics.analyze_race_context(_session_fixture()).participants[
+        2
+    ]
+    with pytest.raises(ValueError):
+        replace(
+            participant,
+            pit_evidence_counts=race_analytics.PitEvidenceCounts(2, 1, 1, 1, 1, 6),
+        )

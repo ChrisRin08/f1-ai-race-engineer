@@ -542,6 +542,96 @@ class LapContextAnalysis:
 
 
 @dataclass(frozen=True)
+class RaceClassificationContext:
+    evidence_status: EvidenceStatus
+    source_evidence_count: int
+    finish_position: int | None
+    classified_position: str | None
+    status: str | None
+    completed_laps: int | None
+
+
+@dataclass(frozen=True)
+class PitEvidenceCounts:
+    complete: int
+    unpaired_entry: int
+    unpaired_exit: int
+    conflicting: int
+    unavailable: int
+    total: int
+
+    def __post_init__(self) -> None:
+        counts = (
+            self.complete,
+            self.unpaired_entry,
+            self.unpaired_exit,
+            self.conflicting,
+            self.unavailable,
+        )
+        if any(type(count) is not int or count < 0 for count in (*counts, self.total)):
+            raise ValueError("Pit evidence counts must be non-negative integers.")
+        if sum(counts) != self.total:
+            raise ValueError("Pit evidence state counts must sum to total.")
+
+
+@dataclass(frozen=True)
+class ParticipantRaceContextAnalysis:
+    identity: RaceContextParticipantIdentity
+    classification: RaceClassificationContext
+    latest_lap_context: ConsolidatedLapContext | None
+    pit_evidence_counts: PitEvidenceCounts
+    lap_contexts: tuple[ConsolidatedLapContext, ...]
+    pit_evidence: tuple[PitLaneEvidence, ...]
+    unassociated_evidence_count: int
+
+    def __post_init__(self) -> None:
+        driver_number = self.identity.driver_number
+        if any(context.driver_number != driver_number for context in self.lap_contexts):
+            raise ValueError("Participant lap contexts must belong to that driver.")
+        if self.latest_lap_context != _select_latest_trusted_lap_context(
+            self.lap_contexts
+        ):
+            raise ValueError(
+                "Latest context must match the latest trusted participant lap."
+            )
+        for evidence in self.pit_evidence:
+            references = (
+                *(boundary.lap_context_reference for boundary in evidence.boundaries),
+                *(
+                    context.lap_context_reference
+                    for context in (evidence.entry_context, evidence.exit_context)
+                    if context is not None
+                ),
+            )
+            if any(
+                reference is not None and reference.driver_number != driver_number
+                for reference in references
+            ):
+                raise ValueError("Participant pit evidence must belong to that driver.")
+        if self.pit_evidence_counts != _count_pit_evidence(self.pit_evidence):
+            raise ValueError(
+                "Pit evidence state counts must match the participant collection."
+            )
+        if (
+            type(self.unassociated_evidence_count) is not int
+            or self.unassociated_evidence_count < 0
+        ):
+            raise ValueError("Unassociated evidence count must be non-negative.")
+
+
+@dataclass(frozen=True)
+class SessionRaceContextAnalysis:
+    participants: tuple[ParticipantRaceContextAnalysis, ...]
+
+    def __post_init__(self) -> None:
+        driver_numbers = tuple(
+            item.identity.driver_number for item in self.participants
+        )
+        if len(set(driver_numbers)) != len(driver_numbers):
+            raise ValueError("Session participant identities must be unique.")
+
+
+@dataclass(frozen=True)
 class _LeaderLapEvidence:
     reference: LeaderReference | None
     progression_times_ns: tuple[int, ...]
@@ -557,6 +647,91 @@ class _PitBoundaryCandidate:
 
 
 _ConsensusValue = TypeVar("_ConsensusValue")
+
+
+def analyze_race_context(race_context: RaceContextInput) -> SessionRaceContextAnalysis:
+    """Compose one reusable session result from one normalized snapshot."""
+    participants = tuple(
+        sorted(
+            race_context.participants,
+            key=lambda participant: _driver_number_order(
+                participant.identity.driver_number
+            ),
+        )
+    )
+    driver_numbers = tuple(p.identity.driver_number for p in participants)
+    if len(set(driver_numbers)) != len(driver_numbers):
+        raise ValueError("Normalized authoritative participants must be unique.")
+
+    lap_analysis = analyze_lap_contexts(race_context)
+    contexts_by_identity = {
+        (context.driver_number, context.lap_number): context
+        for context in lap_analysis.lap_contexts
+    }
+    laps_by_driver: dict[str, list[ConsolidatedLapContext]] = defaultdict(list)
+    rows_by_driver: dict[str, list[RaceContextLapRowInput]] = defaultdict(list)
+    for context in lap_analysis.lap_contexts:
+        laps_by_driver[context.driver_number].append(context)
+    for row in race_context.lap_rows:
+        if row.driver_number in driver_numbers:
+            rows_by_driver[row.driver_number].append(row)
+    invalid_counts = {
+        count.driver_number: count.invalid_lap_identity_count
+        for count in lap_analysis.invalid_lap_identity_counts
+    }
+    analyses = []
+    for participant in participants:
+        driver_number = participant.identity.driver_number
+        lap_contexts = tuple(laps_by_driver[driver_number])
+        pit_evidence = _derive_pit_evidence(
+            rows_by_driver[driver_number],
+            contexts_by_identity,
+            driver_number,
+        )
+        analyses.append(
+            ParticipantRaceContextAnalysis(
+                identity=participant.identity,
+                classification=RaceClassificationContext(
+                    participant.result_evidence_status,
+                    participant.result_evidence_count,
+                    participant.finish_position,
+                    participant.classified_position,
+                    participant.classification_status,
+                    participant.completed_laps,
+                ),
+                latest_lap_context=_select_latest_trusted_lap_context(lap_contexts),
+                pit_evidence_counts=_count_pit_evidence(pit_evidence),
+                lap_contexts=lap_contexts,
+                pit_evidence=pit_evidence,
+                unassociated_evidence_count=invalid_counts[driver_number],
+            )
+        )
+    return SessionRaceContextAnalysis(tuple(analyses))
+
+
+def _select_latest_trusted_lap_context(
+    lap_contexts: tuple[ConsolidatedLapContext, ...],
+) -> ConsolidatedLapContext | None:
+    return next(
+        (
+            context
+            for context in reversed(lap_contexts)
+            if _has_trusted_completion(context)
+        ),
+        None,
+    )
+
+
+def _count_pit_evidence(evidence: tuple[PitLaneEvidence, ...]) -> PitEvidenceCounts:
+    counts = Counter(item.state for item in evidence)
+    return PitEvidenceCounts(
+        complete=counts[PitEvidenceState.COMPLETE],
+        unpaired_entry=counts[PitEvidenceState.UNPAIRED_ENTRY],
+        unpaired_exit=counts[PitEvidenceState.UNPAIRED_EXIT],
+        conflicting=counts[PitEvidenceState.CONFLICTING],
+        unavailable=counts[PitEvidenceState.UNAVAILABLE],
+        total=len(evidence),
+    )
 
 
 def analyze_lap_contexts(race_context: RaceContextInput) -> LapContextAnalysis:
@@ -605,11 +780,23 @@ def analyze_pit_evidence(
     contexts_by_identity = {
         (context.driver_number, context.lap_number): context for context in lap_contexts
     }
+    return _derive_pit_evidence(
+        race_context.lap_rows,
+        contexts_by_identity,
+        driver_number,
+    )
+
+
+def _derive_pit_evidence(
+    lap_rows: tuple[RaceContextLapRowInput, ...] | list[RaceContextLapRowInput],
+    contexts_by_identity: dict[tuple[str, int], ConsolidatedLapContext],
+    driver_number: str,
+) -> tuple[PitLaneEvidence, ...]:
     claims: dict[
         tuple[PitBoundaryKind, int],
         list[tuple[NormalizedValue, bool | None]],
     ] = defaultdict(list)
-    for row in race_context.lap_rows:
+    for row in lap_rows:
         if (
             row.driver_number != driver_number
             or row.lap_number.state is not NormalizedValueState.AVAILABLE
