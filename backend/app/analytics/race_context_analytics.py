@@ -45,6 +45,15 @@ class EqualDistanceTimeDeficitStatus(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+class PitBoundaryKind(StrEnum):
+    ENTRY = "entry"
+    EXIT = "exit"
+
+
+class PitEvidenceState(StrEnum):
+    COMPLETE = "complete"
+
+
 @dataclass(frozen=True)
 class NormalizedValue:
     state: NormalizedValueState
@@ -200,6 +209,149 @@ class LeaderReference:
 
 
 @dataclass(frozen=True)
+class LapContextReference:
+    driver_number: str
+    lap_number: int
+
+    def __post_init__(self) -> None:
+        if type(self.driver_number) is not str or not self.driver_number:
+            raise ValueError("Lap-context reference requires a driver identity.")
+        if type(self.lap_number) is not int or self.lap_number <= 0:
+            raise ValueError("Lap-context reference requires a positive lap number.")
+
+
+@dataclass(frozen=True)
+class PitBoundary:
+    kind: PitBoundaryKind
+    evidence_status: EvidenceStatus
+    source_evidence_count: int
+    lap_number: int | None
+    session_time_ns: int | None
+    session_time_ms: int | None
+    lap_context_reference: LapContextReference | None
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.source_evidence_count) is not int
+            or self.source_evidence_count <= 0
+        ):
+            raise ValueError("Pit boundary requires source evidence.")
+        if self.lap_number is not None and (
+            type(self.lap_number) is not int or self.lap_number <= 0
+        ):
+            raise ValueError("Pit boundary lap number must be positive or None.")
+        if (self.session_time_ns is None) != (self.session_time_ms is None):
+            raise ValueError("Exact and published pit-boundary timing must be paired.")
+        for value in (self.session_time_ns, self.session_time_ms):
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError("Pit-boundary timing must be non-negative.")
+        if self.evidence_status is EvidenceStatus.AVAILABLE and (
+            self.lap_number is None or self.session_time_ns is None
+        ):
+            raise ValueError("Available pit boundary requires lap and timing evidence.")
+        if (
+            self.lap_context_reference is not None
+            and self.lap_context_reference.lap_number != self.lap_number
+        ):
+            raise ValueError("Pit boundary must reference its own lap context.")
+
+
+@dataclass(frozen=True)
+class PitTransitionContext:
+    availability: EvidenceStatus
+    lap_context_reference: LapContextReference | None
+    reported_compound: str | None
+    reported_stint: int | None
+
+    def __post_init__(self) -> None:
+        if self.reported_compound is not None and (
+            type(self.reported_compound) is not str or not self.reported_compound
+        ):
+            raise ValueError("Reported transition compound must be normalized or None.")
+        if self.reported_stint is not None and (
+            type(self.reported_stint) is not int or self.reported_stint <= 0
+        ):
+            raise ValueError("Reported transition stint must be positive or None.")
+
+
+@dataclass(frozen=True)
+class PitLaneEvidence:
+    state: PitEvidenceState
+    boundaries: tuple[PitBoundary, ...]
+    source_boundary_count: int
+    entry_lap_number: int | None
+    exit_lap_number: int | None
+    entry_session_time_ns: int | None
+    entry_session_time_ms: int | None
+    exit_session_time_ns: int | None
+    exit_session_time_ms: int | None
+    entry_to_exit_elapsed_ns: int | None
+    entry_to_exit_elapsed_ms: int | None
+    entry_context: PitTransitionContext | None
+    exit_context: PitTransitionContext | None
+    reported_compound_changed: bool | None
+    reported_stint_changed: bool | None
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.source_boundary_count) is not int
+            or self.source_boundary_count <= 0
+        ):
+            raise ValueError("Pit-lane evidence requires source boundaries.")
+        if self.source_boundary_count != sum(
+            boundary.source_evidence_count for boundary in self.boundaries
+        ):
+            raise ValueError("Pit-lane boundary multiplicity must reconcile.")
+        for exact, published in (
+            (self.entry_session_time_ns, self.entry_session_time_ms),
+            (self.exit_session_time_ns, self.exit_session_time_ms),
+            (self.entry_to_exit_elapsed_ns, self.entry_to_exit_elapsed_ms),
+        ):
+            if (exact is None) != (published is None):
+                raise ValueError("Exact and published pit timing must be paired.")
+            if exact is not None and (
+                type(exact) is not int
+                or exact < 0
+                or type(published) is not int
+                or published < 0
+            ):
+                raise ValueError("Pit-lane timing must be non-negative.")
+        for changed in (
+            self.reported_compound_changed,
+            self.reported_stint_changed,
+        ):
+            if changed is not None and type(changed) is not bool:
+                raise ValueError("Reported transition changes must be boolean or None.")
+        if self.state is PitEvidenceState.COMPLETE:
+            if len(self.boundaries) != 2 or tuple(
+                boundary.kind for boundary in self.boundaries
+            ) != (PitBoundaryKind.ENTRY, PitBoundaryKind.EXIT):
+                raise ValueError("Complete pit evidence requires entry then exit.")
+            if any(
+                value is None
+                for value in (
+                    self.entry_lap_number,
+                    self.exit_lap_number,
+                    self.entry_session_time_ns,
+                    self.exit_session_time_ns,
+                    self.entry_to_exit_elapsed_ns,
+                    self.entry_context,
+                    self.exit_context,
+                )
+            ):
+                raise ValueError("Complete pit evidence requires both boundaries.")
+            if self.exit_session_time_ns <= self.entry_session_time_ns:
+                raise ValueError("Complete pit evidence requires a later exit.")
+            if self.exit_lap_number < self.entry_lap_number:
+                raise ValueError("Complete pit evidence cannot reverse lap identity.")
+            if (
+                self.entry_to_exit_elapsed_ns
+                != self.exit_session_time_ns - self.entry_session_time_ns
+            ):
+                raise ValueError("Pit-lane elapsed timing must use exact boundaries.")
+
+
+@dataclass(frozen=True)
 class ConsolidatedLapContext:
     driver_number: str
     lap_number: int
@@ -313,6 +465,12 @@ class _LeaderLapEvidence:
     progression_times_ns: tuple[int, ...]
 
 
+@dataclass(frozen=True)
+class _PitBoundaryCandidate:
+    boundary: PitBoundary
+    transition_context: PitTransitionContext
+
+
 _ConsensusValue = TypeVar("_ConsensusValue")
 
 
@@ -327,6 +485,131 @@ def analyze_lap_contexts(race_context: RaceContextInput) -> LapContextAnalysis:
         contexts,
         race_context.unassociated_row_count,
         invalid_lap_identity_counts,
+    )
+
+
+def analyze_complete_pit_visits(
+    race_context: RaceContextInput,
+    lap_contexts: tuple[ConsolidatedLapContext, ...],
+    driver_number: str,
+) -> tuple[PitLaneEvidence, ...]:
+    """Derive unambiguous complete visits for one authoritative participant."""
+    participant_numbers = {
+        participant.identity.driver_number for participant in race_context.participants
+    }
+    if driver_number not in participant_numbers:
+        return ()
+
+    contexts_by_identity = {
+        (context.driver_number, context.lap_number): context for context in lap_contexts
+    }
+    candidates: list[_PitBoundaryCandidate] = []
+    for row in race_context.lap_rows:
+        if (
+            row.driver_number != driver_number
+            or row.provider_generated is not False
+            or row.lap_number.state is not NormalizedValueState.AVAILABLE
+        ):
+            continue
+
+        lap_number = row.lap_number.value
+        lap_context = contexts_by_identity[(driver_number, lap_number)]
+        lap_reference = LapContextReference(driver_number, lap_number)
+        transition_context = PitTransitionContext(
+            availability=lap_context.evidence_status,
+            lap_context_reference=lap_reference,
+            reported_compound=lap_context.reported_compound,
+            reported_stint=lap_context.reported_stint,
+        )
+        for kind, timestamp in (
+            (PitBoundaryKind.ENTRY, row.pit_entry_time_ns),
+            (PitBoundaryKind.EXIT, row.pit_exit_time_ns),
+        ):
+            if timestamp.state is not NormalizedValueState.AVAILABLE:
+                continue
+            candidates.append(
+                _PitBoundaryCandidate(
+                    boundary=PitBoundary(
+                        kind=kind,
+                        evidence_status=EvidenceStatus.AVAILABLE,
+                        source_evidence_count=1,
+                        lap_number=lap_number,
+                        session_time_ns=timestamp.value,
+                        session_time_ms=_publish_milliseconds(timestamp.value),
+                        lap_context_reference=lap_reference,
+                    ),
+                    transition_context=transition_context,
+                )
+            )
+
+    candidates_by_time: dict[int, list[_PitBoundaryCandidate]] = defaultdict(list)
+    for candidate in candidates:
+        candidates_by_time[candidate.boundary.session_time_ns].append(candidate)
+
+    visits: list[PitLaneEvidence] = []
+    open_entry: _PitBoundaryCandidate | None = None
+    for session_time_ns in sorted(candidates_by_time):
+        same_time_candidates = candidates_by_time[session_time_ns]
+        if len(same_time_candidates) != 1:
+            open_entry = None
+            continue
+
+        candidate = same_time_candidates[0]
+        if candidate.boundary.kind is PitBoundaryKind.ENTRY:
+            if open_entry is None:
+                open_entry = candidate
+            else:
+                open_entry = None
+            continue
+        if open_entry is None:
+            continue
+        if candidate.boundary.lap_number < open_entry.boundary.lap_number:
+            open_entry = None
+            continue
+        visits.append(_build_complete_pit_visit(open_entry, candidate))
+        open_entry = None
+
+    return tuple(visits)
+
+
+def _build_complete_pit_visit(
+    entry: _PitBoundaryCandidate,
+    exit_: _PitBoundaryCandidate,
+) -> PitLaneEvidence:
+    entry_time_ns = entry.boundary.session_time_ns
+    exit_time_ns = exit_.boundary.session_time_ns
+    elapsed_ns = exit_time_ns - entry_time_ns
+    entry_context = entry.transition_context
+    exit_context = exit_.transition_context
+    compound_changed = (
+        None
+        if entry_context.reported_compound is None
+        or exit_context.reported_compound is None
+        else entry_context.reported_compound != exit_context.reported_compound
+    )
+    stint_changed = (
+        None
+        if entry_context.reported_stint is None or exit_context.reported_stint is None
+        else entry_context.reported_stint != exit_context.reported_stint
+    )
+    return PitLaneEvidence(
+        state=PitEvidenceState.COMPLETE,
+        boundaries=(entry.boundary, exit_.boundary),
+        source_boundary_count=(
+            entry.boundary.source_evidence_count + exit_.boundary.source_evidence_count
+        ),
+        entry_lap_number=entry.boundary.lap_number,
+        exit_lap_number=exit_.boundary.lap_number,
+        entry_session_time_ns=entry_time_ns,
+        entry_session_time_ms=entry.boundary.session_time_ms,
+        exit_session_time_ns=exit_time_ns,
+        exit_session_time_ms=exit_.boundary.session_time_ms,
+        entry_to_exit_elapsed_ns=elapsed_ns,
+        entry_to_exit_elapsed_ms=_publish_milliseconds(elapsed_ns),
+        entry_context=entry_context,
+        exit_context=exit_context,
+        reported_compound_changed=compound_changed,
+        reported_stint_changed=stint_changed,
     )
 
 

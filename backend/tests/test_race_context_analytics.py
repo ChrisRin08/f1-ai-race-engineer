@@ -12,12 +12,15 @@ from app.analytics.race_context_analytics import (
     NormalizedTrackStatusEvidence,
     NormalizedValue,
     NormalizedValueState,
+    PitBoundaryKind,
+    PitEvidenceState,
     RaceContextAvailability,
     RaceContextInput,
     RaceContextLapRowInput,
     RaceContextParticipantIdentity,
     RaceContextParticipantInput,
     TrackStatusAvailability,
+    analyze_complete_pit_visits,
     analyze_lap_contexts,
 )
 
@@ -66,6 +69,8 @@ def _row(
     provider_generated: bool | None = False,
     reported_compound: str | None = "MEDIUM",
     reported_stint: int | None = 1,
+    pit_entry_time_ns: int | None = None,
+    pit_exit_time_ns: int | None = None,
 ) -> RaceContextLapRowInput:
     return RaceContextLapRowInput(
         source_occurrence=source_occurrence,
@@ -73,8 +78,8 @@ def _row(
         lap_number=_value(lap_number),
         lap_completion_time_ns=_value(completion_time_ns),
         lap_completion_position=_value(completion_position),
-        pit_entry_time_ns=_value(None),
-        pit_exit_time_ns=_value(None),
+        pit_entry_time_ns=_value(pit_entry_time_ns),
+        pit_exit_time_ns=_value(pit_exit_time_ns),
         track_status=track_status,
         provider_generated=provider_generated,
         reported_compound=reported_compound,
@@ -100,6 +105,15 @@ def _contexts_by_identity(analysis):
         (context.driver_number, context.lap_number): context
         for context in analysis.lap_contexts
     }
+
+
+def _complete_pit_visits(race_context: RaceContextInput, driver_number: str = "4"):
+    lap_analysis = analyze_lap_contexts(race_context)
+    return analyze_complete_pit_visits(
+        race_context,
+        lap_analysis.lap_contexts,
+        driver_number,
+    )
 
 
 def _assert_derived_context_unavailable(context):
@@ -1064,6 +1078,310 @@ def test_three_identical_executions_are_structurally_equal():
     analyses = tuple(analyze_lap_contexts(normalized_input) for _ in range(3))
 
     assert analyses[0] == analyses[1] == analyses[2]
+
+
+def test_complete_pit_visit_uses_exact_boundaries_and_same_row_context():
+    visits = _complete_pit_visits(
+        _input(
+            (
+                _row(
+                    "4",
+                    8,
+                    source_occurrence=20,
+                    completion_time_ns=80_000_000,
+                    reported_compound="MEDIUM",
+                    reported_stint=1,
+                    pit_entry_time_ns=1_499_999,
+                ),
+                _row(
+                    "4",
+                    10,
+                    source_occurrence=3,
+                    completion_time_ns=100_000_000,
+                    reported_compound="HARD",
+                    reported_stint=2,
+                    pit_exit_time_ns=1_500_000,
+                ),
+            )
+        )
+    )
+
+    assert len(visits) == 1
+    visit = visits[0]
+    assert visit.state is PitEvidenceState.COMPLETE
+    assert tuple(boundary.kind for boundary in visit.boundaries) == (
+        PitBoundaryKind.ENTRY,
+        PitBoundaryKind.EXIT,
+    )
+    assert tuple(boundary.source_evidence_count for boundary in visit.boundaries) == (
+        1,
+        1,
+    )
+    assert visit.source_boundary_count == 2
+    assert visit.entry_lap_number == 8
+    assert visit.exit_lap_number == 10
+    assert visit.entry_session_time_ns == 1_499_999
+    assert visit.entry_session_time_ms == 1
+    assert visit.exit_session_time_ns == 1_500_000
+    assert visit.exit_session_time_ms == 2
+    assert visit.entry_to_exit_elapsed_ns == 1
+    assert visit.entry_to_exit_elapsed_ms == 0
+    assert visit.entry_context.lap_context_reference.driver_number == "4"
+    assert visit.entry_context.lap_context_reference.lap_number == 8
+    assert visit.boundaries[0].lap_context_reference.lap_number == 8
+    assert visit.entry_context.reported_compound == "MEDIUM"
+    assert visit.entry_context.reported_stint == 1
+    assert visit.exit_context.lap_context_reference.driver_number == "4"
+    assert visit.exit_context.lap_context_reference.lap_number == 10
+    assert visit.boundaries[1].lap_context_reference.lap_number == 10
+    assert visit.exit_context.reported_compound == "HARD"
+    assert visit.exit_context.reported_stint == 2
+    assert visit.reported_compound_changed is True
+    assert visit.reported_stint_changed is True
+
+
+def test_complete_visits_are_canonical_without_row_or_lap_adjacency():
+    rows = (
+        _row(
+            "4",
+            2,
+            source_occurrence=50,
+            completion_time_ns=20_000_000,
+            pit_entry_time_ns=100_000_000,
+        ),
+        _row("4", 3, source_occurrence=1, completion_time_ns=30_000_000),
+        _row(
+            "4",
+            4,
+            source_occurrence=40,
+            completion_time_ns=40_000_000,
+            pit_exit_time_ns=200_000_000,
+        ),
+        _row(
+            "4",
+            8,
+            source_occurrence=30,
+            completion_time_ns=80_000_000,
+            pit_entry_time_ns=500_000_000,
+        ),
+        _row(
+            "4",
+            9,
+            source_occurrence=2,
+            completion_time_ns=90_000_000,
+            pit_exit_time_ns=700_000_000,
+        ),
+    )
+    ordered_inputs = (
+        rows,
+        tuple(reversed(rows)),
+        (rows[3], rows[1], rows[4], rows[0], rows[2]),
+    )
+
+    analyses = tuple(
+        _complete_pit_visits(_input(ordered_rows)) for ordered_rows in ordered_inputs
+    )
+
+    assert analyses[0] == analyses[1] == analyses[2]
+    assert [visit.entry_session_time_ns for visit in analyses[0]] == [
+        100_000_000,
+        500_000_000,
+    ]
+    assert [visit.exit_session_time_ns for visit in analyses[0]] == [
+        200_000_000,
+        700_000_000,
+    ]
+    assert [
+        (visit.entry_lap_number, visit.exit_lap_number) for visit in analyses[0]
+    ] == [(2, 4), (8, 9)]
+    assert [visit.source_boundary_count for visit in analyses[0]] == [2, 2]
+
+
+def test_participant_without_pit_boundaries_has_no_complete_visit():
+    race_context = _input((_row("4", 2),))
+
+    lap_analysis = analyze_lap_contexts(race_context)
+    visits = analyze_complete_pit_visits(
+        race_context,
+        lap_analysis.lap_contexts,
+        "4",
+    )
+
+    assert ("4", 2) in _contexts_by_identity(lap_analysis)
+    assert visits == ()
+
+
+def test_equal_reported_transition_values_are_preserved_as_unchanged():
+    visits = _complete_pit_visits(
+        _input(
+            (
+                _row(
+                    "4",
+                    12,
+                    reported_compound="HARD",
+                    reported_stint=3,
+                    pit_entry_time_ns=1_000_000,
+                ),
+                _row(
+                    "4",
+                    13,
+                    source_occurrence=2,
+                    reported_compound="HARD",
+                    reported_stint=3,
+                    pit_exit_time_ns=2_000_000,
+                ),
+            )
+        )
+    )
+
+    visit = visits[0]
+    assert visit.entry_context.reported_compound == "HARD"
+    assert visit.exit_context.reported_compound == "HARD"
+    assert visit.entry_context.reported_stint == 3
+    assert visit.exit_context.reported_stint == 3
+    assert visit.reported_compound_changed is False
+    assert visit.reported_stint_changed is False
+
+
+def test_unavailable_transition_values_do_not_use_nearby_lap_context():
+    visits = _complete_pit_visits(
+        _input(
+            (
+                _row(
+                    "4",
+                    4,
+                    reported_compound="SOFT",
+                    reported_stint=9,
+                ),
+                _row(
+                    "4",
+                    5,
+                    source_occurrence=2,
+                    completion_time_ns=None,
+                    reported_compound=None,
+                    reported_stint=1,
+                    pit_entry_time_ns=1_000_000,
+                ),
+                _row(
+                    "4",
+                    8,
+                    source_occurrence=3,
+                    reported_compound="HARD",
+                    reported_stint=None,
+                    pit_exit_time_ns=3_000_000,
+                ),
+                _row(
+                    "4",
+                    9,
+                    source_occurrence=4,
+                    reported_compound="WET",
+                    reported_stint=4,
+                ),
+            )
+        )
+    )
+
+    visit = visits[0]
+    assert visit.state is PitEvidenceState.COMPLETE
+    assert visit.entry_context.availability is EvidenceStatus.UNAVAILABLE
+    assert visit.entry_context.lap_context_reference.lap_number == 5
+    assert visit.entry_context.reported_compound is None
+    assert visit.entry_context.reported_stint == 1
+    assert visit.exit_context.availability is EvidenceStatus.AVAILABLE
+    assert visit.exit_context.lap_context_reference.lap_number == 8
+    assert visit.exit_context.reported_compound == "HARD"
+    assert visit.exit_context.reported_stint is None
+    assert visit.reported_compound_changed is None
+    assert visit.reported_stint_changed is None
+
+
+def test_transition_values_reuse_same_lap_consolidated_conflict():
+    rows = (
+        _row(
+            "4",
+            4,
+            reported_compound="WET",
+            reported_stint=9,
+        ),
+        _row(
+            "4",
+            5,
+            source_occurrence=2,
+            reported_compound="SOFT",
+            reported_stint=1,
+            pit_entry_time_ns=1_000_000,
+        ),
+        _row(
+            "4",
+            5,
+            source_occurrence=3,
+            reported_compound="HARD",
+            reported_stint=2,
+        ),
+        _row(
+            "4",
+            7,
+            source_occurrence=4,
+            reported_compound="MEDIUM",
+            reported_stint=3,
+            pit_exit_time_ns=3_000_000,
+        ),
+    )
+    analyses = []
+    visits_by_order = []
+    for ordered_rows in (rows, tuple(reversed(rows))):
+        race_context = _input(ordered_rows)
+        lap_analysis = analyze_lap_contexts(race_context)
+        analyses.append(lap_analysis)
+        visits_by_order.append(
+            analyze_complete_pit_visits(
+                race_context,
+                lap_analysis.lap_contexts,
+                "4",
+            )
+        )
+
+    entry_lap = _contexts_by_identity(analyses[0])[("4", 5)]
+    assert entry_lap.evidence_status is EvidenceStatus.CONFLICTING
+    assert entry_lap.reported_compound is None
+    assert entry_lap.reported_stint is None
+    assert visits_by_order[0] == visits_by_order[1]
+    assert len(visits_by_order[0]) == 1
+    visit = visits_by_order[0][0]
+    assert visit.state is PitEvidenceState.COMPLETE
+    assert visit.entry_context.availability is EvidenceStatus.CONFLICTING
+    assert visit.entry_context.lap_context_reference.driver_number == "4"
+    assert visit.entry_context.lap_context_reference.lap_number == 5
+    assert visit.entry_context.reported_compound is None
+    assert visit.entry_context.reported_stint is None
+    assert visit.reported_compound_changed is None
+    assert visit.reported_stint_changed is None
+
+
+@pytest.mark.parametrize("provider_generated", [True, None])
+def test_generated_or_unasserted_boundaries_do_not_establish_complete_visit(
+    provider_generated,
+):
+    visits = _complete_pit_visits(
+        _input(
+            (
+                _row(
+                    "4",
+                    5,
+                    provider_generated=provider_generated,
+                    pit_entry_time_ns=1_000_000,
+                ),
+                _row(
+                    "4",
+                    6,
+                    source_occurrence=2,
+                    pit_exit_time_ns=2_000_000,
+                ),
+            )
+        )
+    )
+
+    assert visits == ()
 
 
 def test_race_context_analytics_imports_only_provider_independent_modules():
