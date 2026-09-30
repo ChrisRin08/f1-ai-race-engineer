@@ -22,6 +22,7 @@ from app.analytics.race_context_analytics import (
     TrackStatusAvailability,
     analyze_complete_pit_visits,
     analyze_lap_contexts,
+    analyze_pit_evidence,
 )
 
 
@@ -114,6 +115,20 @@ def _complete_pit_visits(race_context: RaceContextInput, driver_number: str = "4
         lap_analysis.lap_contexts,
         driver_number,
     )
+
+
+def _pit_evidence(race_context: RaceContextInput, driver_number: str = "4"):
+    lap_analysis = analyze_lap_contexts(race_context)
+    return analyze_pit_evidence(
+        race_context,
+        lap_analysis.lap_contexts,
+        driver_number,
+    )
+
+
+def _assert_no_pit_elapsed(evidence):
+    assert evidence.entry_to_exit_elapsed_ns is None
+    assert evidence.entry_to_exit_elapsed_ms is None
 
 
 def _assert_derived_context_unavailable(context):
@@ -1382,6 +1397,626 @@ def test_generated_or_unasserted_boundaries_do_not_establish_complete_visit(
     )
 
     assert visits == ()
+
+
+@pytest.mark.parametrize(
+    "boundary_kwargs,expected_state,expected_kind",
+    [
+        (
+            {"pit_exit_time_ns": 1_000_000},
+            PitEvidenceState.UNPAIRED_EXIT,
+            PitBoundaryKind.EXIT,
+        ),
+        (
+            {"pit_entry_time_ns": 1_000_000},
+            PitEvidenceState.UNPAIRED_ENTRY,
+            PitBoundaryKind.ENTRY,
+        ),
+    ],
+)
+def test_trustworthy_single_boundary_remains_unpaired(
+    boundary_kwargs,
+    expected_state,
+    expected_kind,
+):
+    evidence = _pit_evidence(_input((_row("4", 5, **boundary_kwargs),)))
+
+    assert len(evidence) == 1
+    item = evidence[0]
+    assert item.state is expected_state
+    assert len(item.boundaries) == 1
+    assert item.boundaries[0].kind is expected_kind
+    assert item.boundaries[0].evidence_status is EvidenceStatus.AVAILABLE
+    assert item.source_boundary_count == 1
+    _assert_no_pit_elapsed(item)
+    if expected_kind is PitBoundaryKind.ENTRY:
+        assert item.entry_lap_number == 5
+        assert item.exit_lap_number is None
+    else:
+        assert item.entry_lap_number is None
+        assert item.exit_lap_number == 5
+
+
+def test_equal_lap_leading_exit_does_not_block_later_complete_visit():
+    rows = (
+        _row("4", 5, pit_exit_time_ns=100),
+        _row("4", 5, source_occurrence=2, pit_entry_time_ns=200),
+        _row("4", 6, source_occurrence=3, pit_exit_time_ns=300),
+    )
+
+    analyses = tuple(
+        _pit_evidence(_input(ordered_rows))
+        for ordered_rows in (rows, tuple(reversed(rows)))
+    )
+    evidence = analyses[0]
+
+    assert analyses[0] == analyses[1]
+    assert [item.state for item in evidence] == [
+        PitEvidenceState.UNPAIRED_EXIT,
+        PitEvidenceState.COMPLETE,
+    ]
+    assert evidence[0].exit_lap_number == 5
+    assert evidence[1].entry_lap_number == 5
+    assert evidence[1].exit_lap_number == 6
+    assert evidence[1].entry_to_exit_elapsed_ns == 100
+
+
+def test_each_leading_exit_is_independently_unpaired():
+    rows = (
+        _row("4", 1, pit_exit_time_ns=100),
+        _row("4", 2, source_occurrence=2, pit_exit_time_ns=200),
+    )
+
+    analyses = tuple(
+        _pit_evidence(_input(ordered_rows))
+        for ordered_rows in (rows, tuple(reversed(rows)))
+    )
+    evidence = analyses[0]
+
+    assert analyses[0] == analyses[1]
+    assert [item.state for item in evidence] == [
+        PitEvidenceState.UNPAIRED_EXIT,
+        PitEvidenceState.UNPAIRED_EXIT,
+    ]
+    assert [item.exit_lap_number for item in evidence] == [1, 2]
+    assert sum(item.source_boundary_count for item in evidence) == 2
+
+
+def test_leading_exits_do_not_consume_a_later_complete_visit():
+    rows = (
+        _row("4", 1, pit_exit_time_ns=100),
+        _row("4", 2, source_occurrence=2, pit_exit_time_ns=200),
+        _row("4", 30, source_occurrence=3, pit_entry_time_ns=300),
+        _row("4", 31, source_occurrence=4, pit_exit_time_ns=400),
+    )
+
+    analyses = tuple(
+        _pit_evidence(_input(ordered_rows))
+        for ordered_rows in (rows, tuple(reversed(rows)))
+    )
+    evidence = analyses[0]
+
+    assert analyses[0] == analyses[1]
+    assert [item.state for item in evidence] == [
+        PitEvidenceState.UNPAIRED_EXIT,
+        PitEvidenceState.UNPAIRED_EXIT,
+        PitEvidenceState.COMPLETE,
+    ]
+    assert [item.exit_lap_number for item in evidence[:2]] == [1, 2]
+    assert evidence[2].entry_lap_number == 30
+    assert evidence[2].exit_lap_number == 31
+    assert sum(item.source_boundary_count for item in evidence) == 4
+
+
+@pytest.mark.parametrize(
+    "provider_generated,kind",
+    [
+        (True, PitBoundaryKind.ENTRY),
+        (True, PitBoundaryKind.EXIT),
+        (None, PitBoundaryKind.ENTRY),
+        (None, PitBoundaryKind.EXIT),
+    ],
+    ids=(
+        "generated-entry",
+        "generated-exit",
+        "unasserted-entry",
+        "unasserted-exit",
+    ),
+)
+def test_timestamped_untrusted_boundary_does_not_split_trusted_visit(
+    provider_generated,
+    kind,
+):
+    boundary_field = (
+        "pit_entry_time_ns" if kind is PitBoundaryKind.ENTRY else "pit_exit_time_ns"
+    )
+    intervening = _row(
+        "4",
+        3,
+        source_occurrence=2,
+        provider_generated=provider_generated,
+        **{boundary_field: 150},
+    )
+    rows = (
+        _row("4", 2, pit_entry_time_ns=100),
+        intervening,
+        _row("4", 4, source_occurrence=3, pit_exit_time_ns=200),
+    )
+    analyses = tuple(
+        _pit_evidence(_input(ordered_rows))
+        for ordered_rows in (rows, tuple(reversed(rows)))
+    )
+
+    assert analyses[0] == analyses[1]
+    assert [item.state for item in analyses[0]] == [
+        PitEvidenceState.COMPLETE,
+        PitEvidenceState.UNAVAILABLE,
+    ]
+    complete, unavailable = analyses[0]
+    assert complete.entry_lap_number == 2
+    assert complete.exit_lap_number == 4
+    assert complete.entry_to_exit_elapsed_ns == 100
+    assert unavailable.boundaries[0].kind is kind
+    assert unavailable.boundaries[0].lap_number == 3
+    assert sum(item.source_boundary_count for item in analyses[0]) == 3
+
+
+def test_timestamped_conflict_does_not_split_trusted_visit():
+    rows = (
+        _row("4", 2, pit_entry_time_ns=100),
+        _row(
+            "4",
+            3,
+            source_occurrence=2,
+            provider_generated=False,
+            pit_entry_time_ns=150,
+        ),
+        _row(
+            "4",
+            3,
+            source_occurrence=3,
+            provider_generated=True,
+            pit_entry_time_ns=150,
+        ),
+        _row("4", 4, source_occurrence=4, pit_exit_time_ns=200),
+    )
+    analyses = tuple(
+        _pit_evidence(_input(ordered_rows))
+        for ordered_rows in (rows, tuple(reversed(rows)))
+    )
+
+    assert analyses[0] == analyses[1]
+    assert [item.state for item in analyses[0]] == [
+        PitEvidenceState.COMPLETE,
+        PitEvidenceState.CONFLICTING,
+    ]
+    assert analyses[0][0].entry_to_exit_elapsed_ns == 100
+    assert analyses[0][1].boundaries[0].session_time_ns == 150
+    assert analyses[0][1].source_boundary_count == 2
+    assert sum(item.source_boundary_count for item in analyses[0]) == 4
+
+
+def test_timestampless_untrusted_boundary_does_not_split_trusted_visit():
+    invalid_entry = replace(
+        _row("4", 3, source_occurrence=2),
+        pit_entry_time_ns=NormalizedValue(NormalizedValueState.INVALID),
+    )
+    rows = (
+        _row("4", 2, pit_entry_time_ns=100),
+        invalid_entry,
+        _row("4", 4, source_occurrence=3, pit_exit_time_ns=200),
+    )
+    analyses = tuple(
+        _pit_evidence(_input(ordered_rows))
+        for ordered_rows in (rows, tuple(reversed(rows)))
+    )
+
+    assert analyses[0] == analyses[1]
+    assert [item.state for item in analyses[0]] == [
+        PitEvidenceState.COMPLETE,
+        PitEvidenceState.UNAVAILABLE,
+    ]
+    assert analyses[0][0].entry_to_exit_elapsed_ns == 100
+    assert analyses[0][1].boundaries[0].session_time_ns is None
+    assert sum(item.source_boundary_count for item in analyses[0]) == 3
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        (
+            _row("4", 5, pit_entry_time_ns=100),
+            _row("4", 6, source_occurrence=2, pit_entry_time_ns=200),
+            _row("4", 7, source_occurrence=3, pit_exit_time_ns=300),
+        ),
+        (
+            _row("4", 5, pit_entry_time_ns=100),
+            _row("4", 6, source_occurrence=2, pit_exit_time_ns=200),
+            _row("4", 7, source_occurrence=3, pit_exit_time_ns=300),
+        ),
+        (
+            _row("4", 5, pit_entry_time_ns=100),
+            _row("4", 6, source_occurrence=2, pit_exit_time_ns=100),
+        ),
+        (
+            _row("4", 6, pit_entry_time_ns=100),
+            _row("4", 5, source_occurrence=2, pit_exit_time_ns=100),
+        ),
+        (
+            _row("4", 5, pit_entry_time_ns=200),
+            _row("4", 6, source_occurrence=2, pit_exit_time_ns=100),
+        ),
+        (
+            _row("4", 6, pit_entry_time_ns=100),
+            _row("4", 5, source_occurrence=2, pit_exit_time_ns=200),
+        ),
+    ],
+    ids=(
+        "entry-before-entry",
+        "competing-exits",
+        "equal-time",
+        "equal-time-reversed-lap-order",
+        "reversed-time",
+        "reversed-lap",
+    ),
+)
+def test_ambiguous_boundary_sequences_form_one_conflicting_group(rows):
+    evidence = _pit_evidence(_input(rows))
+
+    assert len(evidence) == 1
+    item = evidence[0]
+    assert item.state is PitEvidenceState.CONFLICTING
+    assert item.source_boundary_count == len(rows)
+    assert sum(boundary.source_evidence_count for boundary in item.boundaries) == len(
+        rows
+    )
+    assert all(
+        boundary.evidence_status is EvidenceStatus.CONFLICTING
+        for boundary in item.boundaries
+    )
+    _assert_no_pit_elapsed(item)
+
+
+@pytest.mark.parametrize("kind", [PitBoundaryKind.ENTRY, PitBoundaryKind.EXIT])
+def test_asserted_invalid_boundary_is_unavailable(kind):
+    timestamp_field = (
+        "pit_entry_time_ns" if kind is PitBoundaryKind.ENTRY else "pit_exit_time_ns"
+    )
+    row = replace(
+        _row("4", 5),
+        **{timestamp_field: NormalizedValue(NormalizedValueState.INVALID)},
+    )
+
+    evidence = _pit_evidence(_input((row,)))
+
+    assert len(evidence) == 1
+    item = evidence[0]
+    assert item.state is PitEvidenceState.UNAVAILABLE
+    assert item.boundaries[0].kind is kind
+    assert item.boundaries[0].evidence_status is EvidenceStatus.UNAVAILABLE
+    assert item.boundaries[0].session_time_ns is None
+    assert item.source_boundary_count == 1
+    _assert_no_pit_elapsed(item)
+
+
+def test_exact_duplicate_boundary_coalesces_with_multiplicity():
+    rows = (
+        _row("4", 5, source_occurrence=50, pit_entry_time_ns=1_000_000),
+        _row("4", 5, source_occurrence=2, pit_entry_time_ns=1_000_000),
+        _row("4", 7, source_occurrence=1, pit_exit_time_ns=3_000_000),
+    )
+
+    evidence = _pit_evidence(_input(rows))
+
+    assert len(evidence) == 1
+    visit = evidence[0]
+    assert visit.state is PitEvidenceState.COMPLETE
+    assert len(visit.boundaries) == 2
+    assert visit.boundaries[0].kind is PitBoundaryKind.ENTRY
+    assert visit.boundaries[0].source_evidence_count == 2
+    assert visit.boundaries[1].source_evidence_count == 1
+    assert visit.source_boundary_count == 3
+
+
+def test_contradictory_logical_boundary_retains_all_claims_as_conflicting():
+    rows = (
+        _row("4", 5, source_occurrence=99, pit_entry_time_ns=1_000_000),
+        _row("4", 5, source_occurrence=1, pit_entry_time_ns=1_500_000),
+    )
+
+    analyses = tuple(
+        _pit_evidence(_input(ordered_rows))
+        for ordered_rows in (rows, tuple(reversed(rows)))
+    )
+
+    assert analyses[0] == analyses[1]
+    assert len(analyses[0]) == 1
+    item = analyses[0][0]
+    assert item.state is PitEvidenceState.CONFLICTING
+    assert len(item.boundaries) == 1
+    assert item.boundaries[0].kind is PitBoundaryKind.ENTRY
+    assert item.boundaries[0].lap_number == 5
+    assert item.boundaries[0].session_time_ns is None
+    assert item.boundaries[0].source_evidence_count == 2
+    assert item.source_boundary_count == 2
+    assert all(
+        boundary.evidence_status is EvidenceStatus.CONFLICTING
+        for boundary in item.boundaries
+    )
+    _assert_no_pit_elapsed(item)
+
+
+def test_canonical_boundary_order_and_unusable_chronology_last():
+    invalid_entry = replace(
+        _row("4", 8, source_occurrence=3),
+        pit_entry_time_ns=NormalizedValue(NormalizedValueState.INVALID),
+    )
+    evidence = _pit_evidence(
+        _input(
+            (
+                invalid_entry,
+                _row(
+                    "4",
+                    5,
+                    source_occurrence=2,
+                    pit_entry_time_ns=100,
+                    pit_exit_time_ns=100,
+                ),
+                _row("4", 1, source_occurrence=1, pit_exit_time_ns=50),
+            )
+        )
+    )
+
+    assert [item.state for item in evidence] == [
+        PitEvidenceState.UNPAIRED_EXIT,
+        PitEvidenceState.CONFLICTING,
+        PitEvidenceState.UNAVAILABLE,
+    ]
+    assert [boundary.kind for boundary in evidence[1].boundaries] == [
+        PitBoundaryKind.ENTRY,
+        PitBoundaryKind.EXIT,
+    ]
+    assert evidence[-1].boundaries[0].session_time_ns is None
+
+
+@pytest.mark.parametrize("provider_generated", [True, None])
+def test_generated_or_unasserted_boundary_is_auditable_but_unavailable(
+    provider_generated,
+):
+    evidence = _pit_evidence(
+        _input(
+            (
+                _row(
+                    "4",
+                    5,
+                    provider_generated=provider_generated,
+                    pit_entry_time_ns=1_000_000,
+                ),
+            )
+        )
+    )
+
+    assert len(evidence) == 1
+    item = evidence[0]
+    assert item.state is PitEvidenceState.UNAVAILABLE
+    assert item.boundaries[0].kind is PitBoundaryKind.ENTRY
+    assert item.boundaries[0].session_time_ns == 1_000_000
+    assert item.boundaries[0].evidence_status is EvidenceStatus.UNAVAILABLE
+    assert item.source_boundary_count == 1
+    _assert_no_pit_elapsed(item)
+
+
+def test_invalid_identity_populations_remain_separate_from_pit_evidence():
+    invalid_lap = replace(
+        _row("4", 5, pit_entry_time_ns=1_000_000),
+        lap_number=NormalizedValue(NormalizedValueState.INVALID),
+    )
+    roster_orphan = _row(
+        "99",
+        2,
+        source_occurrence=2,
+        pit_exit_time_ns=2_000_000,
+    )
+    race_context = _input(
+        (invalid_lap, roster_orphan),
+        unassociated_row_count=1,
+    )
+
+    lap_analysis = analyze_lap_contexts(race_context)
+    evidence = analyze_pit_evidence(
+        race_context,
+        lap_analysis.lap_contexts,
+        "4",
+    )
+
+    assert lap_analysis.roster_orphan_row_count == 1
+    assert [
+        (count.driver_number, count.invalid_lap_identity_count)
+        for count in lap_analysis.invalid_lap_identity_counts
+    ] == [("1", 0), ("4", 1)]
+    assert evidence == ()
+
+
+def test_nonstarter_and_retirement_keep_authoritative_and_earlier_context():
+    nonstarter = replace(
+        _participant("27"),
+        classified_position="DNS",
+        classification_status="Did not start",
+        completed_laps=0,
+    )
+    retiree = replace(
+        _participant("4"),
+        classified_position="DNF",
+        classification_status="Retired",
+        completed_laps=3,
+    )
+    race_context = RaceContextInput(
+        participants=(nonstarter, retiree),
+        lap_rows=(
+            _row("4", 3, completion_time_ns=3_000_000),
+            _row(
+                "4",
+                4,
+                source_occurrence=2,
+                completion_time_ns=4_000_000,
+                provider_generated=True,
+                pit_entry_time_ns=4_500_000,
+            ),
+        ),
+        unassociated_row_count=0,
+    )
+
+    lap_analysis = analyze_lap_contexts(race_context)
+    contexts = _contexts_by_identity(lap_analysis)
+    retiree_pit_evidence = analyze_pit_evidence(
+        race_context,
+        lap_analysis.lap_contexts,
+        "4",
+    )
+
+    assert not any(
+        context.driver_number == "27" for context in lap_analysis.lap_contexts
+    )
+    assert contexts[("4", 3)].completion_time_ns == 3_000_000
+    assert contexts[("4", 3)].provider_generated is False
+    assert contexts[("4", 4)].provider_generated is True
+    assert retiree_pit_evidence[0].state is PitEvidenceState.UNAVAILABLE
+
+
+def test_missing_classification_and_lap_facts_remain_explicit():
+    participant = _participant("4")
+    missing_facts = _row(
+        "4",
+        2,
+        completion_time_ns=None,
+        completion_position=None,
+        track_status=UNAVAILABLE_TRACK_STATUS,
+        reported_compound=None,
+        reported_stint=None,
+    )
+    race_context = RaceContextInput(
+        participants=(participant,),
+        lap_rows=(missing_facts,),
+        unassociated_row_count=0,
+    )
+
+    context = analyze_lap_contexts(race_context).lap_contexts[0]
+
+    assert participant.finish_position is None
+    assert participant.classified_position is None
+    assert participant.classification_status is None
+    assert participant.completed_laps is None
+    assert context.evidence_status is EvidenceStatus.UNAVAILABLE
+    assert context.completion_time_ns is None
+    assert context.completion_position is None
+    assert context.track_status is UNAVAILABLE_TRACK_STATUS
+    assert context.reported_compound is None
+    assert context.reported_stint is None
+
+
+def test_transition_context_preserves_per_fact_consensus_for_pit_evidence():
+    rows = (
+        _row(
+            "4",
+            5,
+            reported_compound="SOFT",
+            reported_stint=1,
+            pit_entry_time_ns=1_000_000,
+        ),
+        _row(
+            "4",
+            5,
+            source_occurrence=2,
+            reported_compound="HARD",
+            reported_stint=1,
+        ),
+        _row(
+            "4",
+            7,
+            source_occurrence=3,
+            reported_compound="MEDIUM",
+            reported_stint=2,
+            pit_exit_time_ns=3_000_000,
+        ),
+    )
+
+    visit = _pit_evidence(_input(rows))[0]
+
+    assert visit.state is PitEvidenceState.COMPLETE
+    assert visit.entry_context.reported_compound is None
+    assert visit.entry_context.reported_stint == 1
+    assert visit.reported_compound_changed is None
+    assert visit.reported_stint_changed is True
+
+
+def test_incomplete_conflicting_evidence_is_deterministic_and_reconciled():
+    valid_rows = (
+        _row("4", 1, source_occurrence=90, pit_exit_time_ns=50),
+        _row("4", 2, source_occurrence=80, pit_entry_time_ns=100),
+        _row("4", 2, source_occurrence=70, pit_entry_time_ns=100),
+        _row("4", 3, source_occurrence=60, pit_exit_time_ns=200),
+        _row(
+            "4",
+            4,
+            source_occurrence=50,
+            provider_generated=True,
+            pit_entry_time_ns=300,
+        ),
+        _row("4", 5, source_occurrence=40, pit_entry_time_ns=400),
+    )
+    invalid_lap = replace(
+        _row("4", 6, source_occurrence=30, pit_entry_time_ns=500),
+        lap_number=NormalizedValue(NormalizedValueState.INVALID),
+    )
+    roster_orphan = _row(
+        "99",
+        1,
+        source_occurrence=20,
+        pit_exit_time_ns=600,
+    )
+    all_rows = valid_rows + (invalid_lap, roster_orphan)
+    orders = (
+        all_rows,
+        tuple(reversed(all_rows)),
+        (
+            all_rows[4],
+            all_rows[1],
+            all_rows[6],
+            all_rows[5],
+            all_rows[0],
+            all_rows[7],
+            all_rows[3],
+            all_rows[2],
+        ),
+    )
+
+    normalized_inputs = tuple(_input(rows, unassociated_row_count=1) for rows in orders)
+    analyses = tuple(_pit_evidence(race_context) for race_context in normalized_inputs)
+    repeated = tuple(_pit_evidence(normalized_inputs[0]) for _ in range(3))
+
+    assert analyses[0] == analyses[1] == analyses[2]
+    assert repeated[0] == repeated[1] == repeated[2]
+    assert [item.state for item in analyses[0]] == [
+        PitEvidenceState.UNPAIRED_EXIT,
+        PitEvidenceState.COMPLETE,
+        PitEvidenceState.UNAVAILABLE,
+        PitEvidenceState.UNPAIRED_ENTRY,
+    ]
+    assert [item.source_boundary_count for item in analyses[0]] == [1, 3, 1, 1]
+    lap_analysis = analyze_lap_contexts(normalized_inputs[0])
+    invalid_lap_count = next(
+        count.invalid_lap_identity_count
+        for count in lap_analysis.invalid_lap_identity_counts
+        if count.driver_number == "4"
+    )
+    assert sum(
+        item.source_boundary_count for item in analyses[0]
+    ) + invalid_lap_count + lap_analysis.roster_orphan_row_count == len(all_rows)
+    assert all(
+        item.entry_to_exit_elapsed_ns is None
+        for item in analyses[0]
+        if item.state is not PitEvidenceState.COMPLETE
+    )
 
 
 def test_race_context_analytics_imports_only_provider_independent_modules():

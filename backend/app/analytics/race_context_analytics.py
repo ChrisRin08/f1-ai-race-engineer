@@ -1,7 +1,7 @@
 """Application-owned inputs and pure deterministic race-context analytics."""
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import TypeVar
@@ -52,6 +52,10 @@ class PitBoundaryKind(StrEnum):
 
 class PitEvidenceState(StrEnum):
     COMPLETE = "complete"
+    UNPAIRED_ENTRY = "unpaired_entry"
+    UNPAIRED_EXIT = "unpaired_exit"
+    CONFLICTING = "conflicting"
+    UNAVAILABLE = "unavailable"
 
 
 @dataclass(frozen=True)
@@ -349,6 +353,84 @@ class PitLaneEvidence:
                 != self.exit_session_time_ns - self.entry_session_time_ns
             ):
                 raise ValueError("Pit-lane elapsed timing must use exact boundaries.")
+            if any(
+                boundary.evidence_status is not EvidenceStatus.AVAILABLE
+                for boundary in self.boundaries
+            ):
+                raise ValueError("Complete pit evidence requires trusted boundaries.")
+            return
+
+        if self.entry_to_exit_elapsed_ns is not None or any(
+            changed is not None
+            for changed in (
+                self.reported_compound_changed,
+                self.reported_stint_changed,
+            )
+        ):
+            raise ValueError("Incomplete pit evidence cannot carry derived values.")
+        if self.state is PitEvidenceState.UNPAIRED_ENTRY:
+            self._validate_unpaired(PitBoundaryKind.ENTRY)
+        elif self.state is PitEvidenceState.UNPAIRED_EXIT:
+            self._validate_unpaired(PitBoundaryKind.EXIT)
+        elif self.state is PitEvidenceState.CONFLICTING:
+            if any(
+                boundary.evidence_status is not EvidenceStatus.CONFLICTING
+                for boundary in self.boundaries
+            ):
+                raise ValueError(
+                    "Conflicting pit evidence requires conflicting boundaries."
+                )
+            self._validate_no_trusted_boundary_fields()
+        elif self.state is PitEvidenceState.UNAVAILABLE:
+            if any(
+                boundary.evidence_status is not EvidenceStatus.UNAVAILABLE
+                for boundary in self.boundaries
+            ):
+                raise ValueError(
+                    "Unavailable pit evidence requires unavailable boundaries."
+                )
+            self._validate_no_trusted_boundary_fields()
+
+    def _validate_unpaired(self, kind: PitBoundaryKind) -> None:
+        if len(self.boundaries) != 1 or self.boundaries[0].kind is not kind:
+            raise ValueError("Unpaired pit evidence requires its named boundary.")
+        boundary = self.boundaries[0]
+        if boundary.evidence_status is not EvidenceStatus.AVAILABLE:
+            raise ValueError("Unpaired pit evidence requires a trusted boundary.")
+        if kind is PitBoundaryKind.ENTRY:
+            valid = (
+                self.entry_lap_number == boundary.lap_number
+                and self.entry_session_time_ns == boundary.session_time_ns
+                and self.entry_session_time_ms == boundary.session_time_ms
+                and self.entry_context is not None
+                and self.exit_lap_number is None
+                and self.exit_session_time_ns is None
+                and self.exit_context is None
+            )
+        else:
+            valid = (
+                self.exit_lap_number == boundary.lap_number
+                and self.exit_session_time_ns == boundary.session_time_ns
+                and self.exit_session_time_ms == boundary.session_time_ms
+                and self.exit_context is not None
+                and self.entry_lap_number is None
+                and self.entry_session_time_ns is None
+                and self.entry_context is None
+            )
+        if not valid:
+            raise ValueError("Unpaired pit evidence fields must match its boundary.")
+
+    def _validate_no_trusted_boundary_fields(self) -> None:
+        if any(
+            value is not None
+            for value in (
+                self.entry_lap_number,
+                self.exit_lap_number,
+                self.entry_session_time_ns,
+                self.exit_session_time_ns,
+            )
+        ):
+            raise ValueError("Untrusted pit evidence cannot carry trusted boundaries.")
 
 
 @dataclass(frozen=True)
@@ -467,6 +549,9 @@ class _LeaderLapEvidence:
 
 @dataclass(frozen=True)
 class _PitBoundaryCandidate:
+    kind: PitBoundaryKind
+    lap_number: int
+    evidence_status: EvidenceStatus
     boundary: PitBoundary
     transition_context: PitTransitionContext
 
@@ -494,6 +579,23 @@ def analyze_complete_pit_visits(
     driver_number: str,
 ) -> tuple[PitLaneEvidence, ...]:
     """Derive unambiguous complete visits for one authoritative participant."""
+    return tuple(
+        evidence
+        for evidence in analyze_pit_evidence(
+            race_context,
+            lap_contexts,
+            driver_number,
+        )
+        if evidence.state is PitEvidenceState.COMPLETE
+    )
+
+
+def analyze_pit_evidence(
+    race_context: RaceContextInput,
+    lap_contexts: tuple[ConsolidatedLapContext, ...],
+    driver_number: str,
+) -> tuple[PitLaneEvidence, ...]:
+    """Derive canonical auditable pit evidence for one authoritative participant."""
     participant_numbers = {
         participant.identity.driver_number for participant in race_context.participants
     }
@@ -503,16 +605,28 @@ def analyze_complete_pit_visits(
     contexts_by_identity = {
         (context.driver_number, context.lap_number): context for context in lap_contexts
     }
-    candidates: list[_PitBoundaryCandidate] = []
+    claims: dict[
+        tuple[PitBoundaryKind, int],
+        list[tuple[NormalizedValue, bool | None]],
+    ] = defaultdict(list)
     for row in race_context.lap_rows:
         if (
             row.driver_number != driver_number
-            or row.provider_generated is not False
             or row.lap_number.state is not NormalizedValueState.AVAILABLE
         ):
             continue
 
         lap_number = row.lap_number.value
+        for kind, timestamp in (
+            (PitBoundaryKind.ENTRY, row.pit_entry_time_ns),
+            (PitBoundaryKind.EXIT, row.pit_exit_time_ns),
+        ):
+            if timestamp.state is NormalizedValueState.ABSENT:
+                continue
+            claims[(kind, lap_number)].append((timestamp, row.provider_generated))
+
+    candidates = []
+    for (kind, lap_number), logical_claims in claims.items():
         lap_context = contexts_by_identity[(driver_number, lap_number)]
         lap_reference = LapContextReference(driver_number, lap_number)
         transition_context = PitTransitionContext(
@@ -521,63 +635,205 @@ def analyze_complete_pit_visits(
             reported_compound=lap_context.reported_compound,
             reported_stint=lap_context.reported_stint,
         )
-        for kind, timestamp in (
-            (PitBoundaryKind.ENTRY, row.pit_entry_time_ns),
-            (PitBoundaryKind.EXIT, row.pit_exit_time_ns),
-        ):
-            if timestamp.state is not NormalizedValueState.AVAILABLE:
-                continue
-            candidates.append(
-                _PitBoundaryCandidate(
-                    boundary=PitBoundary(
-                        kind=kind,
-                        evidence_status=EvidenceStatus.AVAILABLE,
-                        source_evidence_count=1,
-                        lap_number=lap_number,
-                        session_time_ns=timestamp.value,
-                        session_time_ms=_publish_milliseconds(timestamp.value),
-                        lap_context_reference=lap_reference,
-                    ),
-                    transition_context=transition_context,
+        claim_counts = Counter(logical_claims)
+        if len(claim_counts) == 1:
+            (timestamp, provider_generated), source_count = next(
+                iter(claim_counts.items())
+            )
+            evidence_status = (
+                EvidenceStatus.AVAILABLE
+                if timestamp.state is NormalizedValueState.AVAILABLE
+                and provider_generated is False
+                else EvidenceStatus.UNAVAILABLE
+            )
+            boundary = _build_pit_boundary(
+                kind,
+                lap_number,
+                timestamp,
+                evidence_status,
+                source_count,
+                lap_reference,
+            )
+        else:
+            timestamps = tuple(
+                timestamp for timestamp, _provider_generated in logical_claims
+            )
+            timestamp = (
+                timestamps[0]
+                if all(
+                    candidate_timestamp == timestamps[0]
+                    for candidate_timestamp in timestamps
+                )
+                else NormalizedValue(NormalizedValueState.INVALID)
+            )
+            boundary = _build_pit_boundary(
+                kind,
+                lap_number,
+                timestamp,
+                EvidenceStatus.CONFLICTING,
+                len(logical_claims),
+                lap_reference,
+            )
+            evidence_status = EvidenceStatus.CONFLICTING
+        candidates.append(
+            _PitBoundaryCandidate(
+                kind=kind,
+                lap_number=lap_number,
+                evidence_status=evidence_status,
+                boundary=boundary,
+                transition_context=transition_context,
+            )
+        )
+
+    ordered_candidates = tuple(sorted(candidates, key=_pit_candidate_order))
+    trusted_candidates = tuple(
+        candidate
+        for candidate in ordered_candidates
+        if candidate.evidence_status is EvidenceStatus.AVAILABLE
+    )
+    evidence = list(_associate_trusted_pit_candidates(trusted_candidates))
+    for candidate in ordered_candidates:
+        if candidate.evidence_status is EvidenceStatus.AVAILABLE:
+            continue
+        if candidate.evidence_status is EvidenceStatus.CONFLICTING:
+            evidence.append(
+                _build_noncomplete_pit_evidence(
+                    PitEvidenceState.CONFLICTING,
+                    (candidate,),
                 )
             )
+        else:
+            evidence.append(
+                _build_noncomplete_pit_evidence(
+                    PitEvidenceState.UNAVAILABLE,
+                    (candidate,),
+                )
+            )
+    return tuple(sorted(evidence, key=_pit_evidence_order))
 
-    candidates_by_time: dict[int, list[_PitBoundaryCandidate]] = defaultdict(list)
-    for candidate in candidates:
-        candidates_by_time[candidate.boundary.session_time_ns].append(candidate)
 
-    visits: list[PitLaneEvidence] = []
-    open_entry: _PitBoundaryCandidate | None = None
-    for session_time_ns in sorted(candidates_by_time):
-        same_time_candidates = candidates_by_time[session_time_ns]
-        if len(same_time_candidates) != 1:
-            open_entry = None
+def _build_pit_boundary(
+    kind: PitBoundaryKind,
+    lap_number: int,
+    timestamp: NormalizedValue,
+    evidence_status: EvidenceStatus,
+    source_count: int,
+    lap_reference: LapContextReference,
+) -> PitBoundary:
+    exact_time = (
+        timestamp.value if timestamp.state is NormalizedValueState.AVAILABLE else None
+    )
+    return PitBoundary(
+        kind=kind,
+        evidence_status=evidence_status,
+        source_evidence_count=source_count,
+        lap_number=lap_number,
+        session_time_ns=exact_time,
+        session_time_ms=(
+            _publish_milliseconds(exact_time) if exact_time is not None else None
+        ),
+        lap_context_reference=lap_reference,
+    )
+
+
+def _associate_trusted_pit_candidates(
+    candidates: tuple[_PitBoundaryCandidate, ...],
+) -> tuple[PitLaneEvidence, ...]:
+    evidence = []
+    index = 0
+    while index < len(candidates):
+        candidate = candidates[index]
+        if candidate.kind is PitBoundaryKind.EXIT:
+            next_candidate = (
+                candidates[index + 1] if index + 1 < len(candidates) else None
+            )
+            if (
+                next_candidate is not None
+                and next_candidate.kind is PitBoundaryKind.ENTRY
+                and (
+                    _pit_candidate_time(candidate)
+                    == _pit_candidate_time(next_candidate)
+                    or candidate.lap_number > next_candidate.lap_number
+                )
+            ):
+                entry_end = index + 1
+                while (
+                    entry_end < len(candidates)
+                    and candidates[entry_end].kind is PitBoundaryKind.ENTRY
+                ):
+                    entry_end += 1
+                evidence.append(
+                    _build_noncomplete_pit_evidence(
+                        PitEvidenceState.CONFLICTING,
+                        candidates[index:entry_end],
+                    )
+                )
+                index = entry_end
+                continue
+            evidence.append(
+                _build_noncomplete_pit_evidence(
+                    PitEvidenceState.UNPAIRED_EXIT,
+                    (candidate,),
+                )
+            )
+            index += 1
             continue
 
-        candidate = same_time_candidates[0]
-        if candidate.boundary.kind is PitBoundaryKind.ENTRY:
-            if open_entry is None:
-                open_entry = candidate
+        entry_end = index
+        while (
+            entry_end < len(candidates)
+            and candidates[entry_end].kind is PitBoundaryKind.ENTRY
+        ):
+            entry_end += 1
+        exit_end = entry_end
+        while (
+            exit_end < len(candidates)
+            and candidates[exit_end].kind is PitBoundaryKind.EXIT
+        ):
+            exit_end += 1
+        entry_run = candidates[index:entry_end]
+        exit_run = candidates[entry_end:exit_end]
+        if not exit_run:
+            state = (
+                PitEvidenceState.UNPAIRED_ENTRY
+                if len(entry_run) == 1
+                else PitEvidenceState.CONFLICTING
+            )
+            evidence.append(_build_noncomplete_pit_evidence(state, entry_run))
+        elif len(entry_run) == 1 and len(exit_run) == 1:
+            entry = entry_run[0]
+            exit_ = exit_run[0]
+            if (
+                _pit_candidate_time(exit_) > _pit_candidate_time(entry)
+                and exit_.lap_number >= entry.lap_number
+            ):
+                evidence.append(_build_complete_pit_visit(entry, exit_))
             else:
-                open_entry = None
-            continue
-        if open_entry is None:
-            continue
-        if candidate.boundary.lap_number < open_entry.boundary.lap_number:
-            open_entry = None
-            continue
-        visits.append(_build_complete_pit_visit(open_entry, candidate))
-        open_entry = None
-
-    return tuple(visits)
+                evidence.append(
+                    _build_noncomplete_pit_evidence(
+                        PitEvidenceState.CONFLICTING,
+                        entry_run + exit_run,
+                    )
+                )
+        else:
+            evidence.append(
+                _build_noncomplete_pit_evidence(
+                    PitEvidenceState.CONFLICTING,
+                    entry_run + exit_run,
+                )
+            )
+        index = exit_end
+    return tuple(evidence)
 
 
 def _build_complete_pit_visit(
     entry: _PitBoundaryCandidate,
     exit_: _PitBoundaryCandidate,
 ) -> PitLaneEvidence:
-    entry_time_ns = entry.boundary.session_time_ns
-    exit_time_ns = exit_.boundary.session_time_ns
+    entry_boundary = entry.boundary
+    exit_boundary = exit_.boundary
+    entry_time_ns = entry_boundary.session_time_ns
+    exit_time_ns = exit_boundary.session_time_ns
     elapsed_ns = exit_time_ns - entry_time_ns
     entry_context = entry.transition_context
     exit_context = exit_.transition_context
@@ -594,22 +850,146 @@ def _build_complete_pit_visit(
     )
     return PitLaneEvidence(
         state=PitEvidenceState.COMPLETE,
-        boundaries=(entry.boundary, exit_.boundary),
+        boundaries=(entry_boundary, exit_boundary),
         source_boundary_count=(
-            entry.boundary.source_evidence_count + exit_.boundary.source_evidence_count
+            entry_boundary.source_evidence_count + exit_boundary.source_evidence_count
         ),
-        entry_lap_number=entry.boundary.lap_number,
-        exit_lap_number=exit_.boundary.lap_number,
+        entry_lap_number=entry_boundary.lap_number,
+        exit_lap_number=exit_boundary.lap_number,
         entry_session_time_ns=entry_time_ns,
-        entry_session_time_ms=entry.boundary.session_time_ms,
+        entry_session_time_ms=entry_boundary.session_time_ms,
         exit_session_time_ns=exit_time_ns,
-        exit_session_time_ms=exit_.boundary.session_time_ms,
+        exit_session_time_ms=exit_boundary.session_time_ms,
         entry_to_exit_elapsed_ns=elapsed_ns,
         entry_to_exit_elapsed_ms=_publish_milliseconds(elapsed_ns),
         entry_context=entry_context,
         exit_context=exit_context,
         reported_compound_changed=compound_changed,
         reported_stint_changed=stint_changed,
+    )
+
+
+def _build_noncomplete_pit_evidence(
+    state: PitEvidenceState,
+    candidates: tuple[_PitBoundaryCandidate, ...],
+) -> PitLaneEvidence:
+    boundaries = tuple(
+        sorted(
+            (
+                replace(
+                    candidate.boundary,
+                    evidence_status=(
+                        EvidenceStatus.CONFLICTING
+                        if state is PitEvidenceState.CONFLICTING
+                        else candidate.boundary.evidence_status
+                    ),
+                )
+                for candidate in candidates
+            ),
+            key=_pit_boundary_order,
+        )
+    )
+    entry_candidates = tuple(
+        candidate for candidate in candidates if candidate.kind is PitBoundaryKind.ENTRY
+    )
+    exit_candidates = tuple(
+        candidate for candidate in candidates if candidate.kind is PitBoundaryKind.EXIT
+    )
+    entry_context = (
+        entry_candidates[0].transition_context if len(entry_candidates) == 1 else None
+    )
+    exit_context = (
+        exit_candidates[0].transition_context if len(exit_candidates) == 1 else None
+    )
+    entry_lap_number = None
+    exit_lap_number = None
+    entry_session_time_ns = None
+    entry_session_time_ms = None
+    exit_session_time_ns = None
+    exit_session_time_ms = None
+    if state is PitEvidenceState.UNPAIRED_ENTRY:
+        boundary = boundaries[0]
+        entry_lap_number = boundary.lap_number
+        entry_session_time_ns = boundary.session_time_ns
+        entry_session_time_ms = boundary.session_time_ms
+    elif state is PitEvidenceState.UNPAIRED_EXIT:
+        boundary = boundaries[0]
+        exit_lap_number = boundary.lap_number
+        exit_session_time_ns = boundary.session_time_ns
+        exit_session_time_ms = boundary.session_time_ms
+    return PitLaneEvidence(
+        state=state,
+        boundaries=boundaries,
+        source_boundary_count=sum(
+            boundary.source_evidence_count for boundary in boundaries
+        ),
+        entry_lap_number=entry_lap_number,
+        exit_lap_number=exit_lap_number,
+        entry_session_time_ns=entry_session_time_ns,
+        entry_session_time_ms=entry_session_time_ms,
+        exit_session_time_ns=exit_session_time_ns,
+        exit_session_time_ms=exit_session_time_ms,
+        entry_to_exit_elapsed_ns=None,
+        entry_to_exit_elapsed_ms=None,
+        entry_context=entry_context,
+        exit_context=exit_context,
+        reported_compound_changed=None,
+        reported_stint_changed=None,
+    )
+
+
+def _pit_candidate_time(candidate: _PitBoundaryCandidate) -> int:
+    return candidate.boundary.session_time_ns
+
+
+def _pit_candidate_order(
+    candidate: _PitBoundaryCandidate,
+) -> tuple[bool, int, int, int, tuple[bool, int, bool, int, int]]:
+    session_time_ns = candidate.boundary.session_time_ns
+    return (
+        session_time_ns is None,
+        session_time_ns if session_time_ns is not None else 0,
+        candidate.lap_number,
+        0 if candidate.kind is PitBoundaryKind.ENTRY else 1,
+        _pit_boundary_order(candidate.boundary),
+    )
+
+
+def _pit_boundary_order(boundary: PitBoundary) -> tuple[bool, int, bool, int, int]:
+    return (
+        boundary.session_time_ns is None,
+        boundary.session_time_ns if boundary.session_time_ns is not None else 0,
+        boundary.lap_number is None,
+        boundary.lap_number if boundary.lap_number is not None else 0,
+        0 if boundary.kind is PitBoundaryKind.ENTRY else 1,
+    )
+
+
+def _pit_evidence_order(evidence: PitLaneEvidence) -> tuple:
+    available_times = tuple(
+        boundary.session_time_ns
+        for boundary in evidence.boundaries
+        if boundary.session_time_ns is not None
+    )
+    available_laps = tuple(
+        boundary.lap_number
+        for boundary in evidence.boundaries
+        if boundary.lap_number is not None
+    )
+    state_order = {
+        PitEvidenceState.COMPLETE: 0,
+        PitEvidenceState.UNPAIRED_ENTRY: 1,
+        PitEvidenceState.UNPAIRED_EXIT: 2,
+        PitEvidenceState.CONFLICTING: 3,
+        PitEvidenceState.UNAVAILABLE: 4,
+    }
+    return (
+        not available_times,
+        min(available_times) if available_times else 0,
+        not available_laps,
+        min(available_laps) if available_laps else 0,
+        state_order[evidence.state],
+        tuple(_pit_boundary_order(boundary) for boundary in evidence.boundaries),
     )
 
 
