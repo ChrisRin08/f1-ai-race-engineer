@@ -288,6 +288,11 @@ adjacency or a manufactured boundary.
 
 Canonical order depends only on normalized facts, never Pandas row position.
 
+Central analytics owns this order using the full normalized facts. Services
+and projections preserve it exactly; millisecond publication does not redefine
+domain chronology. Standalone public validation has the observability limits
+specified under Direct-construction invariants below.
+
 ## 3. Strict public projection models
 
 All public models live in models/race_context_models.py, forbid extra fields,
@@ -315,7 +320,10 @@ remain explicit rather than inferred from lap rows.
 #### TrackStatusContext
 
 Contains availability, ordered unique track_statuses, and nullable
-is_disrupted. It enforces the approved truth table without deriving it.
+is_disrupted. It enforces enum validity, uniqueness, availability, and the
+approved truth table without deriving or replacing supplied facts. It does not
+sort statuses or independently verify original source-observation order, since
+no separate source sequence is exposed. Projection preserves domain order.
 
 #### LeaderReference
 
@@ -360,7 +368,8 @@ instantaneous pit-boundary state.
 Contains state, boundaries, source_boundary_count, entry and exit lap/time
 fields, entry_to_exit_elapsed_ms, entry and exit contexts, and nullable
 reported-value changed flags. The model rejects state/field contradictions and
-noncanonical boundary order without repairing them.
+boundary-order violations provable from exposed fields without repairing them.
+Equal published timestamps do not establish exact chronology ties.
 
 #### PitEvidenceCounts
 
@@ -412,7 +421,9 @@ SessionRaceContextParticipant value is used by both projections.
 
 The strict public boundary rejects:
 
-- noncanonical participant, lap, status, boundary, or pit-evidence order;
+- noncanonical participant and lap order, whose keys remain fully exposed;
+- boundary and pit-evidence order violations provable from exposed fields;
+- duplicate TrackStatus values or invalid enum/availability/disruption facts;
 - duplicate participant or driver/lap public identities;
 - source_evidence_count or state-count inconsistencies;
 - available values without the required evidence and null values that
@@ -427,6 +438,48 @@ The strict public boundary rejects:
 - any silent sort, deduplication, pairing, calculation, or repair.
 
 These are validation rules, not analytics.
+
+### Ordering observability at the public boundary
+
+Domain canonicality and independently checkable public invariants are distinct.
+The central result retains exact nanosecond chronology and supported
+TrackStatus observation order. Projection must preserve that order. Public
+validators cannot reconstruct lost precision or independent source provenance.
+
+For adjacent pit boundaries:
+
+- A usable published timestamp precedes absent chronology under the domain
+  usable-chronology-first rule.
+- Distinct usable millisecond timestamps establish chronological order.
+- Equal usable millisecond timestamps do not establish equal exact timestamps.
+  Do not descend into lap number or kind as if exact chronology tied.
+- If both timestamps are absent, lower exposed lap/kind keys may be checked
+  only where the domain policy proves the relationship.
+
+For pit evidence collections, the same rules apply to each item's earliest
+usable boundary timestamp. Distinct published earliest timestamps permit
+chronological checks. Colliding published timestamps do not justify lap/state
+tie-breaks. When chronology is genuinely absent, lower exposed keys may be
+checked only if preceding domain-order dimensions are known to tie.
+
+For example, a lap-2 boundary at 1,100,000 ns precedes a lap-1 boundary at
+1,200,000 ns, but both publish to 1 ms. This valid projection must not be
+rejected by applying a lap-number tie-break to the rounded collision.
+Structural rules, including kind/timestamp consistency and complete/incomplete
+pit composition, remain enforceable.
+
+TrackStatus order is the original supported provider observation sequence
+after de-duplication. The public object contains that sequence but no
+independent witness of its original order. Validation checks allowed values,
+uniqueness, availability, and the disruption truth table; it must not invent
+enum order or recreate provider history.
+
+Ambiguity means an ordering violation cannot independently be proved, not that
+validation may choose another order. Validators never sort, deduplicate,
+derive, calculate, pair, infer, or repair supplied data. Otherwise valid
+canonical central projections remain accepted in rounding-collision and
+source-order cases. Strict scalar, required-nullable, identity, reference,
+count, and state/field requirements are unchanged.
 
 ## Public error boundary
 

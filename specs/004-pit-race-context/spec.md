@@ -19,7 +19,11 @@
 
 - Q: Which public numeric contract should represent session-relative timestamps, pit-lane elapsed time, equal-distance time deficit, and lapped-driver availability? → A: Publish integer milliseconds with half-up rounding; use `_session_time_ms`, `entry_to_exit_elapsed_ms`, and `equal_distance_time_deficit_ms`; keep `laps_behind` separate; and use `available`, `not_applicable`, or `unavailable` time-deficit status.
 - Q: Which combined public evidence policy should Feature 004 use for pit states, before/after context, and disrupted track status? → A: Use pit evidence states `complete`, `unpaired_entry`, `unpaired_exit`, `conflicting`, and `unavailable`; take before/after context from the entry/in-lap and exit/out-lap completion rows without fallback; and expose ordered, de-duplicated normalized `track_statuses` with explicit availability and nullable `is_disrupted`. `is_disrupted` is true when any known disrupted status is present, false only when trustworthy status evidence supports no disrupted status, and null when the evidence is unavailable or cannot support a trustworthy boolean; `unknown` is never treated as green.
-- Q: Which combined public projection contract should Feature 004 use for resource composition, audit granularity, ordering, and direct-construction invariants? → A: Provide a compact session-level participant view and auditable driver detail, with all pit evidence in driver detail and no separate pit-only resource in v1. Driver detail exposes the complete compact normalized lap-context series rather than raw provider rows. Apply canonical participant, lap, and pit-evidence ordering; represent duplicate source evidence through explicit conflict or multiplicity semantics; and reject noncanonical order, duplicate public identities, and state/field contradictions during direct construction. Both resources are projections of one centrally derived race-context analysis, not independently calculated views.
+- Q: Which combined public projection contract should Feature 004 use for resource composition, audit granularity, ordering, and direct-construction invariants? → A: Provide a compact session-level participant view and auditable driver detail, with all pit evidence in driver detail and no separate pit-only resource in v1. Driver detail exposes the complete compact normalized lap-context series rather than raw provider rows. Apply canonical participant, lap, and pit-evidence ordering; represent duplicate source evidence through explicit conflict or multiplicity semantics; and reject ordering contradictions provable from exposed public fields, duplicate public identities, and state/field contradictions during direct construction. Both resources are projections of one centrally derived race-context analysis, not independently calculated views.
+
+### Session 2026-09-29
+
+- Q: How can public models validate order after millisecond publication loses exact chronology and TrackStatus lacks independent source-order provenance? → A: Keep exact domain canonical ordering, integer nanoseconds, ROUND_HALF_UP millisecond publication, and the current public schema. Services and projections preserve central-analysis order exactly. Direct public construction rejects only ordering contradictions provable from exposed fields; equal published milliseconds do not prove equal exact timestamps, and validators cannot independently reconstruct original TrackStatus observation order. Public ambiguity never authorizes sorting, inference, or repair.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -198,10 +202,13 @@ invalid structures, and no additional source acquisition within that operation.
    it contains that driver's complete compact normalized lap-context series and
    all pit evidence, rather than raw provider rows or a separately calculated
    pit-only view.
-6. **Given** a public result is directly constructed with noncanonical order,
-   duplicate public identities, or a state/field contradiction, **When** it is
-   validated, **Then** it is rejected rather than silently sorted, deduplicated,
-   or repaired.
+6. **Given** a public result is directly constructed with an ordering violation
+   provable from exposed public fields, duplicate public identities, or a
+   state/field contradiction, **When** it is validated, **Then** it is rejected
+   rather than silently sorted, deduplicated, or repaired. Valid canonical
+   central projections remain accepted when millisecond collisions or missing
+   independent source-order provenance prevent an ordering violation from
+   being proved.
 
 ### Edge Cases
 
@@ -482,15 +489,31 @@ invalid structures, and no additional source acquisition within that operation.
   evidence rather than raw provider rows.
 - **FR-061**: Feature 004 v1 MUST NOT expose a separate pit-only public
   resource.
-- **FR-062**: Direct construction MUST reject participant, lap-context, or
-  pit-evidence collections that do not follow the canonical ordering required
-  by FR-055, FR-059, or FR-018, respectively.
+- **FR-062**: Central analytics MUST own canonical order using the full
+  normalized facts, including exact nanosecond chronology and supported
+  TrackStatus observation order. Services and projections MUST preserve that
+  order exactly without sorting or reinterpretation. Direct public construction
+  MUST reject every ordering contradiction provable from exposed public fields.
+  Participant and lap-context ordering under FR-055 and FR-059 remains fully
+  checkable. Pit-boundary and pit-evidence ordering is checkable only where the
+  public facts establish the preceding ordering dimensions: equal published
+  milliseconds MUST NOT be treated as proof of equal exact timestamps or used
+  to justify lap/kind/state tie-breaks. Genuinely absent chronology permits
+  lower observable keys only where the domain policy justifies them.
+  TrackStatus validation MUST enforce allowed values, uniqueness, availability,
+  and the disruption truth table, without independently reconstructing original
+  source-observation order or inventing enum order.
 - **FR-063**: Direct construction MUST reject duplicate public participant or
   driver/lap identities.
 - **FR-064**: Direct construction MUST reject combinations of public state and
   fields that contradict the specified state semantics.
 - **FR-065**: Direct construction MUST NOT silently sort, deduplicate, or repair
-  an invalid public result rejected under FR-062, FR-063, or FR-064.
+  supplied collections or invalid public results under FR-062, FR-063, or
+  FR-064. Validators MUST NOT derive, calculate, pair, infer, or reconstruct
+  ordering distinctions lost during projection. Public ambiguity means an
+  ordering violation cannot independently be proved; it MUST NOT cause a
+  valid canonical central projection to be rejected or authorize a different
+  canonical order.
 
 ### Approved Source and Architecture Constraints
 
@@ -618,10 +641,14 @@ Feature 004 does not implement or claim:
   for every published pit elapsed value, position, lap deficit, and
   equal-distance time deficit which source observations support it or why it is
   unavailable.
-- **SC-013**: Controlled direct-construction cases reject 100% of noncanonical
-  participant, lap-context, or pit-evidence ordering; duplicate public
-  participant or driver/lap identities; and state/field contradictions without
-  silently sorting, deduplicating, or repairing them.
+- **SC-013**: Controlled direct-construction cases reject 100% of ordering
+  violations provable from exposed public fields, duplicate public participant
+  or driver/lap identities, and state/field contradictions without silently
+  sorting, deduplicating, calculating, or repairing them. They accept 100% of
+  otherwise valid canonical central projections in controlled
+  millisecond-collision and TrackStatus source-order cases. Full participant
+  and lap-order validation, strict scalar validation, and all other structural
+  invariants remain required.
 
 ## Assumptions
 

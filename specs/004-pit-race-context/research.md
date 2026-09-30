@@ -377,6 +377,9 @@ defect 500.
 
 ## Decision 13: Enforce strict construction without performing analytics
 
+Historical decision; its ordering-rejection scope is clarified by the
+owner-approved Decision 14 below. The original reasoning is retained here.
+
 **Decision**: Public models reject noncanonical participant, lap, status, pit,
 and boundary ordering; duplicate public identities; invalid enum/value
 combinations; count mismatches; and contradictory state/field combinations.
@@ -393,6 +396,51 @@ Representative invariants:
 - unpaired states contain exactly the named boundary and no elapsed value;
 - conflicting and unavailable items expose their evidence/multiplicity and no
   falsely trusted elapsed result.
+
+## Decision 14: Limit public order validation to exposed evidence
+
+**Owner-approved addendum (2026-09-29)**: Before Group D implementation,
+analysis established that universal standalone rejection of noncanonical
+domain order is impossible with the current public fields. Exact timestamps
+1,100,000 ns and 1,200,000 ns both publish to 1 ms. For boundaries on laps 2
+and 1 respectively, exact chronology orders lap 2 first; treating equal
+published milliseconds as an exact tie would instead demand lap 1 first.
+Swapping the exact timestamps reverses domain order without changing either
+boundary's public facts. The same loss affects earliest-boundary ordering of
+pit evidence items. TrackStatus similarly exposes the already-ordered sequence
+without independent provenance against which original observation order can
+be verified.
+
+**Selected policy**: Keep reviewed exact domain canonical ordering, integer
+nanoseconds as the analytical coordinate, ROUND_HALF_UP millisecond
+publication, and the current public schema. Central analytics owns order;
+services and projections preserve it exactly. Public validators reject only
+ordering contradictions provable from exposed fields. Different published
+timestamps and usable-versus-absent chronology permit checks. Equal published
+milliseconds do not prove exact ties and do not authorize lower lap/kind/state
+tie-breaks. Genuinely absent chronology permits lower exposed keys only where
+the domain policy makes them conclusive.
+
+TrackStatus validators enforce enum validity, uniqueness, availability, and
+the disruption truth table, without enum sorting or reconstructing original
+observation order. Participant and lap ordering remain fully checkable.
+Duplicate identities, strict scalars, required nullable fields, state/field
+consistency, references, and counts retain their existing validation
+requirements. Validators never sort, deduplicate, derive, calculate, pair,
+infer, or repair. Ambiguous public order is not proof of a violation and cannot
+justify rejection of a valid central projection.
+
+**Alternatives rejected by the owner**:
+
+- Expose additional ordering provenance: rejected to retain the current public
+  schema without exact timestamps, ordinals, or hidden sort keys.
+- Define public ordering independently of domain ordering: rejected to preserve
+  one authoritative central analysis and projections without reinterpretation.
+
+The selected option preserves analytics behavior and schema compatibility
+while stating the independently enforceable public guarantee accurately.
+FR-062–FR-065, SC-013, and Group D validation guidance encode this clarification;
+Decision 14 governs the ordering scope of Decision 13.
 
 ## Dependency decision
 

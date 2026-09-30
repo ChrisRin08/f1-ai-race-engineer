@@ -184,7 +184,9 @@ Pure immutable-input tests must prove:
 
 Direct model tests must accept canonical valid structures and reject:
 
-- noncanonical participant, lap, status, boundary, or pit-evidence order;
+- noncanonical participant/lap order and boundary/pit-evidence order violations
+  provable from exposed public fields;
+- duplicate statuses and invalid enum/availability/disruption combinations;
 - duplicate participant or driver/lap public identities;
 - available equal-distance state without laps_behind zero and a value;
 - not_applicable without positive laps_behind or with a time value;
@@ -196,6 +198,31 @@ Direct model tests must accept canonical valid structures and reject:
 - booleans accepted as integers, coercible numeric strings, NaN, or infinity;
   and
 - any attempted silent sorting, deduplication, pairing, or repair.
+
+Ordering acceptance checks under FR-062–FR-065 and SC-013 must include:
+
+1. Two distinct exact timestamps, such as 1,100,000 ns and 1,200,000 ns,
+   collapse to the same published millisecond under ROUND_HALF_UP.
+2. A canonical central projection with the earlier boundary on lap 2 and the
+   later boundary on lap 1 remains accepted when both public timestamps are
+   1 ms. Cover boundaries within conflicting evidence and chronology-bearing
+   pit evidence items.
+3. Validators do not treat equal published milliseconds as exact timestamp
+   ties or descend into lap/kind/state keys on that basis. Distinct published
+   timestamps and usable-versus-absent chronology still expose order violations;
+   genuinely absent chronology permits lower keys only where domain policy
+   makes their relationship provable. No ambiguous input is sorted or repaired.
+4. Supported TrackStatus sequences such as green/yellow and yellow/green are
+   preserved by projection and accepted when their availability and disruption
+   facts are consistent. Validation checks uniqueness and the truth table,
+   without reconstructing source order or sorting by enum declaration.
+
+Central analytics remains the authoritative owner of exact canonical order.
+Services and projections preserve it exactly. Public ambiguity does not
+authorize another order or rejection of an otherwise valid central projection.
+Extra fields, missing required nullable fields, scalar coercion, duplicate
+identities, reference/count mismatches, and state/field contradictions still
+fail strict construction.
 
 ## Validate one central analysis
 

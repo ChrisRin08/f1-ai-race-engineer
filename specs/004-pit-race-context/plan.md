@@ -396,7 +396,8 @@ services/race_context_service.py owns one private load-and-analyze operation:
 5. project either the full compact participant list or one driver detail; and
 6. construct strict public models.
 
-Projection maps existing domain values only. It does not count, choose latest
+Projection preserves central-analysis collection order exactly and maps
+existing domain values only. It does not count, choose latest
 context, normalize, sort, pair, calculate, or round. The driver operation
 returns driver_not_found only after the one complete analysis, preserving
 authoritative field semantics.
@@ -426,7 +427,9 @@ tire change, live gap, physical separation, or instantaneous pit position.
 
 Direct construction rejects:
 
-- noncanonical participant, lap, boundary, status, and pit-evidence ordering;
+- noncanonical participant and lap ordering, and boundary/pit-evidence ordering
+  contradictions provable from exposed public fields;
+- duplicate TrackStatus values and availability/disruption contradictions;
 - duplicate public participant and driver/lap identities;
 - state/value contradictions;
 - identity/reference mismatches;
@@ -434,6 +437,22 @@ Direct construction rejects:
 - non-finite or coercible-but-wrong scalar types.
 
 Validators do not sort, deduplicate, repair, derive, pair, or perform analytics.
+
+Canonical domain order remains owned by central analytics using exact
+nanoseconds and supported source-observation order. Public validation does not
+reconstruct information lost during projection. Distinct published
+milliseconds permit chronological checks; equal published milliseconds do not
+imply equal exact timestamps and cannot justify descending into lap, kind, or
+state tie-breaks. Usable chronology precedes absent chronology; when chronology
+is genuinely absent, lower exposed keys may be checked only where the domain
+policy makes the relation provable. Structural state rules remain enforceable.
+
+TrackStatus validation checks enum validity, uniqueness, availability, and the
+approved disruption truth table. It preserves the supplied sequence without
+inventing enum order or claiming to verify original provider observation order
+from an independent provenance sequence that the schema does not expose.
+Public ambiguity cannot authorize reordering or rejection of an otherwise
+valid canonical central projection. The current public schema is unchanged.
 
 ## API and Contract Design
 
@@ -502,12 +521,19 @@ Controlled immutable inputs cover:
 
 Direct construction covers accepted canonical examples and rejects:
 
-- noncanonical participant, lap, boundary, status, and pit order;
+- noncanonical participant/lap order and publicly provable boundary/pit order
+  violations;
+- duplicate statuses and invalid status availability/disruption combinations;
 - duplicate participant and driver/lap identities;
 - contradictory availability/value and pit-state/field combinations;
 - mismatched counts and references;
 - NaN, infinity, booleans-as-integers, and coercible strings; and
 - every attempted silent sort, deduplication, or repair.
+
+Acceptance cases cover valid exact-domain order when distinct nanosecond
+timestamps publish to the same millisecond, with no false lap/kind/state
+tie-break, and supported TrackStatus permutations preserved without enum
+sorting or reconstruction of lost source-observation provenance.
 
 ### Service and API
 
