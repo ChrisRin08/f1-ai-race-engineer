@@ -79,7 +79,7 @@ The backend is the authoritative source for data loading, validation, determinis
 ### Deferred
 - PostgreSQL, Supabase, and pgvector
 - Amazon Bedrock implementation
-- Gemini Live voice interaction
+- Live voice interaction
 - Authentication
 - Docker
 - Pit strategy simulation

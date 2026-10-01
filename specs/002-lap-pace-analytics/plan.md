@@ -81,7 +81,7 @@ specs/002-lap-pace-analytics/
 │   └── openapi.yaml
 ├── checklists/
 │   └── requirements.md
-└── tasks.md                 # Created later by $speckit-tasks; not in this plan run
+└── tasks.md                 # Created later during task generation; not in this planning stage
 ```
 
 ### Source Code (repository root)

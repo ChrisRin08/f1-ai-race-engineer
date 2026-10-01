@@ -31,7 +31,7 @@
 
 ## Notes
 
-- Items marked incomplete require spec updates before `$speckit-clarify` or `$speckit-plan`.
+- Items marked incomplete require spec updates before clarification or planning.
 - Validation completed on 2026-09-11. All checklist items pass on the first
   review after one wording refinement to make missing versus contradictory stint
   metadata outcomes explicit.

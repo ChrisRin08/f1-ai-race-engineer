@@ -40,6 +40,6 @@
   classes, routes, response composition, or algorithms beyond the required
   arithmetic meanings.
 - Eleven non-blocking product-contract decisions are collected in the
-  specification's Clarification Backlog for `$speckit-clarify`. They are not
+  specification's Clarification Backlog for clarification. They are not
   `[NEEDS CLARIFICATION]` markers because the approved specification can remain
   product-complete without resolving their exact public vocabulary or shape.

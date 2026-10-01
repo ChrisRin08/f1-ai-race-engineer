@@ -32,7 +32,7 @@
 - [ ] T014 Generate OpenAPI from backend/app/main.py after the migration and require exact equality with /tmp/feature-004-pre-migration-openapi.json, including paths, operation IDs, and schemas
 - [ ] T015 Verify backend/app/data/f1_data.py still resolves FASTF1_CACHE_DIR to backend/cache/fastf1 and verify backend/pyproject.toml and backend/uv.lock have no diff
 - [ ] T016 Audit the migration diff for only file moves, declaration-only package markers, required import/module-path changes, and cache-path preservation, then run git diff --check from the repository root
-- [ ] T017 Obtain fresh independent Codex review approval of the bounded migration diff in backend/app/ and backend/tests/, explicitly confirming Feature 001–003 behavior preservation and recording approval before T018 begins
+- [ ] T017 Obtain fresh independent review approval of the bounded migration diff in backend/app/ and backend/tests/, explicitly confirming Feature 001–003 behavior preservation and recording approval before T018 begins
 
 **Checkpoint**: Responsibility packages exist, the migration is independently verified, and no Feature 004 behavior has been introduced.
 
@@ -103,7 +103,7 @@
 - [ ] T042 [US4] Add failing tests in backend/tests/test_race_context_analytics.py for one central session-wide result, exactly one authoritative participant summary per results participant, zero-evidence participants, state counts, latest trustworthy context, canonical participant/lap/pit ordering, and projection-ready facts without raw provider rows
 - [ ] T043 [US4] Implement the central race-context analysis coordinator and participant-summary derivation in backend/app/analytics/race_context_analytics.py by composing the reviewed lap and pit transformations once, without a giant function, view-specific analytics, or speculative interfaces
 - [ ] T044 [US4] Run all of backend/tests/test_race_context_analytics.py and confirm central result reuse, deterministic ordering, exact evidence accounting, repeatability, and Feature 005-ready domain ownership
-- [ ] T045 [US4] Obtain fresh independent Codex review of backend/app/analytics/race_context_analytics.py and backend/tests/test_race_context_analytics.py, focusing on duplicate policy, pit association, leader/lapped semantics, exact timing, generated evidence, determinism, and absence of duplicated or misplaced analytics
+- [ ] T045 [US4] Obtain fresh independent review of backend/app/analytics/race_context_analytics.py and backend/tests/test_race_context_analytics.py, focusing on duplicate policy, pit association, leader/lapped semantics, exact timing, generated evidence, determinism, and absence of duplicated or misplaced analytics
 
 **Checkpoint**: Central analytics are independently approved before public models, orchestration, or transport are added.
 
@@ -157,7 +157,7 @@
 - [ ] T068 Run Ruff format checking and Ruff lint over backend/app/ and backend/tests/, applying only Feature 004-related corrections and then rerunning both checks
 - [ ] T069 Run the opt-in Feature 004 Monza integration slice in backend/tests/test_f1_data_integration.py when provider access is authorized, recording provider compatibility separately from synthetic policy coverage
 - [ ] T070 Audit backend/app/, backend/tests/, README.md, docs/architecture.md, docs/demo-v0.1.md, and specs/004-pit-race-context/ against FR-001–FR-065, SC-001–SC-013, the OpenAPI contract, prohibited scope, exact file layout, no dependency diffs, no private FastF1 API or telemetry, and git diff --check
-- [ ] T071 Obtain fresh independent Codex review of the completed Feature 004 diff across backend/app/, backend/tests/, README.md, docs/architecture.md, and docs/demo-v0.1.md before any feature commit, with explicit attention to Gate A preservation, provider isolation, central-analysis reuse, pit pairing, lapped semantics, strict public invariants, error compatibility, test sufficiency, and architectural simplicity
+- [ ] T071 Obtain fresh independent review of the completed Feature 004 diff across backend/app/, backend/tests/, README.md, docs/architecture.md, and docs/demo-v0.1.md before any feature commit, with explicit attention to Gate A preservation, provider isolation, central-analysis reuse, pit pairing, lapped semantics, strict public invariants, error compatibility, test sufficiency, and architectural simplicity
 - [ ] T072 After resolving only approved review findings, rerun backend/tests/, Ruff format/lint, generated OpenAPI checks, dependency-diff checks, integration checks when authorized, and git diff --check, then record final owner-review readiness without committing, pushing, or merging
 
 ## Dependencies and Execution Order

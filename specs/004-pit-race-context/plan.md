@@ -100,7 +100,7 @@ is required.
     └── checklists/
         └── requirements.md
 
-tasks.md is intentionally absent. It belongs to the later speckit-tasks stage.
+tasks.md is intentionally absent. It belongs to the later task-generation stage.
 
 ### Final source layout after the bounded migration and Feature 004
 

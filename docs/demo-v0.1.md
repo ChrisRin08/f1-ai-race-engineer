@@ -49,7 +49,7 @@ The following are explicitly out of scope for Demo v0.1 unless the plan changes:
 - Supabase or PostgreSQL
 - pgvector or RAG
 - Amazon Bedrock implementation
-- Gemini Live voice interaction
+- Live voice interaction
 - Authentication
 - Docker
 - scikit-learn model training

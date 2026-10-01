@@ -247,7 +247,7 @@ The following are intentionally deferred:
 - PostgreSQL, Supabase, and database persistence
 - pgvector and retrieval-augmented generation
 - Amazon Bedrock implementation
-- Gemini Live or real-time voice interaction
+- Live or real-time voice interaction
 - Authentication
 - Docker
 - scikit-learn predictive ML models

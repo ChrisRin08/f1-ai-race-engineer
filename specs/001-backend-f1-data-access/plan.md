@@ -70,7 +70,7 @@ specs/001-backend-f1-data-access/
 ├── quickstart.md
 ├── contracts/
 │   └── openapi.yaml
-└── tasks.md                 # Created later by $speckit-tasks
+└── tasks.md                 # Created later during task generation
 ```
 
 ### Source Code (repository root)
