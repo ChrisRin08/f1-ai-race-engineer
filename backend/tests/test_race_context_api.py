@@ -1,9 +1,12 @@
-"""Direct construction of Feature 004 public models; no HTTP orchestration."""
+"""Strict Feature 004 public construction and thin HTTP resource contracts."""
 
+import json
 from copy import deepcopy
 from importlib import import_module, util
+from unittest.mock import Mock
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 
@@ -11,6 +14,434 @@ def models():
     name = "app.models.race_context_models"
     assert util.find_spec(name) is not None, "Feature 004 public models are missing"
     return import_module(name)
+
+
+RACE_URL = "/api/v1/seasons/2025/events/italian-grand-prix/sessions/race/race-context"
+RACE_VIEWS = [
+    ("", "load_session_race_context"),
+    ("/drivers/2", "load_driver_race_context"),
+]
+
+
+@pytest.fixture
+def race_http(monkeypatch):
+    from app import main
+    from app.analytics import race_context_analytics
+    from app.data import f1_data
+
+    session_result = models().SessionRaceContextResponse(**session())
+    driver_result = models().DriverRaceContextResponse(**populated_detail())
+    operations = {}
+    for name, result in (
+        ("load_session_race_context", session_result),
+        ("load_driver_race_context", driver_result),
+    ):
+        operations[name] = Mock(return_value=result)
+        monkeypatch.setattr(main, name, operations[name], raising=False)
+    provider = Mock(side_effect=AssertionError("Route bypassed service"))
+    analyzer = Mock(side_effect=AssertionError("Route bypassed service"))
+    monkeypatch.setattr(f1_data, "load_session", provider)
+    monkeypatch.setattr(main, "load_session_summary", provider)
+    monkeypatch.setattr(race_context_analytics, "analyze_race_context", analyzer)
+    with TestClient(main.app, raise_server_exceptions=False) as client:
+        yield client, operations, provider, analyzer
+
+
+@pytest.mark.parametrize("suffix,operation", RACE_VIEWS)
+def test_http_race_success_is_one_passive_service_call(race_http, suffix, operation):
+    client, operations, provider, analyzer = race_http
+    response = client.get(RACE_URL + suffix)
+    assert response.status_code == 200
+    assert response.json() == operations[operation].return_value.model_dump(mode="json")
+    args = (2025, "italian-grand-prix", "race") + (("2",) if suffix else ())
+    operations[operation].assert_called_once_with(*args)
+    assert sum(mock.call_count for mock in operations.values()) == 1
+    provider.assert_not_called()
+    analyzer.assert_not_called()
+    json.loads(
+        response.text,
+        parse_constant=lambda value: pytest.fail("Nonfinite JSON: " + value),
+    )
+
+
+@pytest.mark.parametrize("suffix,operation", RACE_VIEWS)
+def test_http_race_known_empty_participant_is_200(race_http, suffix, operation):
+    client, operations, _, _ = race_http
+    payload = detail() if suffix else dict(session(), participants=[participant()])
+    response_model = (
+        models().DriverRaceContextResponse
+        if suffix
+        else models().SessionRaceContextResponse
+    )
+    operations[operation].return_value = response_model(**payload)
+    response = client.get(RACE_URL + suffix)
+    assert response.status_code == 200
+    assert response.json() == payload
+
+
+@pytest.mark.parametrize("suffix,operation", RACE_VIEWS)
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ("2025", "1949"),
+        ("2025", "bad"),
+        ("italian-grand-prix", "Italian-Grand-Prix"),
+        ("italian-grand-prix", "bad_slug"),
+        ("race/race-context", "Race/race-context"),
+        ("race/race-context", "bad--slug/race-context"),
+    ],
+)
+def test_http_race_malformed_session_rejects_before_work(
+    race_http, suffix, operation, old, new
+):
+    client, operations, provider, analyzer = race_http
+    assert client.get(RACE_URL.replace(old, new) + suffix).status_code == 422
+    for mock in (*operations.values(), provider, analyzer):
+        mock.assert_not_called()
+
+
+@pytest.mark.parametrize("number", ["01", "0", "-1", "A", "2.0", " 2", "2 "])
+def test_http_race_driver_selector_is_not_repaired(race_http, number):
+    client, operations, provider, analyzer = race_http
+    assert client.get(RACE_URL + "/drivers/" + number).status_code == 422
+    for mock in (*operations.values(), provider, analyzer):
+        mock.assert_not_called()
+
+
+@pytest.mark.parametrize("suffix,operation", RACE_VIEWS)
+@pytest.mark.parametrize(
+    "private",
+    [
+        "SECRET_PROVIDER_INTERNAL_DETAIL",
+        "/Users/christian/private/cache/path",
+        "token=SUPER_SECRET_TEST_VALUE",
+    ],
+)
+@pytest.mark.parametrize("expected", [False, True])
+def test_http_race_error_boundary_does_not_leak(
+    race_http, suffix, operation, private, expected
+):
+    from app.data.f1_data import DataSourceUnavailableError
+
+    client, operations, provider, analyzer = race_http
+    operations[operation].side_effect = (
+        DataSourceUnavailableError if expected else RuntimeError
+    )(private)
+    response = client.get(RACE_URL + suffix)
+    assert response.status_code == (503 if expected else 500)
+    assert private not in response.text
+    assert "Traceback" not in response.text and "RuntimeError" not in response.text
+    if expected:
+        assert response.json() == {
+            "error": {
+                "code": "data_source_unavailable",
+                "message": "Formula 1 session data is currently unavailable.",
+            }
+        }
+    else:
+        assert response.text == "Internal Server Error"
+    operations[operation].assert_called_once()
+    assert sum(mock.call_count for mock in operations.values()) == 1
+    provider.assert_not_called()
+    analyzer.assert_not_called()
+
+
+def test_http_race_unknown_driver_has_safe_public_error(race_http):
+    from app.services.pace_service import DriverNotFoundError
+
+    client, operations, _, _ = race_http
+    operations["load_driver_race_context"].side_effect = DriverNotFoundError(
+        "private roster detail"
+    )
+    response = client.get(RACE_URL + "/drivers/999")
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": {
+            "code": "driver_not_found",
+            "message": "The requested driver is not in the session results.",
+        }
+    }
+    operations["load_driver_race_context"].assert_called_once_with(
+        2025, "italian-grand-prix", "race", "999"
+    )
+
+
+@pytest.mark.parametrize("suffix", ["", "/drivers/4"])
+def test_http_race_unsupported_uses_real_service_boundary(monkeypatch, suffix):
+    from app.analytics import race_context_analytics
+    from app.data import f1_data
+    from app.main import app
+
+    provider = Mock(side_effect=AssertionError("Unsupported provider acquisition"))
+    analyzer = Mock(side_effect=AssertionError("Unsupported analysis"))
+    monkeypatch.setattr(f1_data, "load_session", provider)
+    monkeypatch.setattr(race_context_analytics, "analyze_race_context", analyzer)
+    with TestClient(app) as client:
+        response = client.get(RACE_URL.replace("2025", "2024") + suffix)
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": {
+            "code": "session_not_supported",
+            "message": "The requested session is not supported.",
+        }
+    }
+    provider.assert_not_called()
+    analyzer.assert_not_called()
+
+
+@pytest.mark.parametrize("suffix,operation", RACE_VIEWS)
+@pytest.mark.parametrize("invalid", ["extra", "missing", "nonfinite", "bool"])
+def test_http_race_invalid_service_output_fails_closed(
+    race_http, suffix, operation, invalid
+):
+    client, operations, _, _ = race_http
+    payload = operations[operation].return_value.model_dump(mode="json")
+    if invalid == "extra":
+        payload["private_provider_rows"] = ["SECRET_PROVIDER_INTERNAL_DETAIL"]
+    elif invalid == "missing":
+        del payload["source"]
+    else:
+        summary = payload["participant"] if suffix else payload["participants"][0]
+        summary["unassociated_evidence_count"] = (
+            float("nan") if invalid == "nonfinite" else True
+        )
+    operations[operation].return_value = payload
+    response = client.get(RACE_URL + suffix)
+    assert response.status_code == 500
+    assert response.text == "Internal Server Error"
+    operations[operation].assert_called_once()
+
+
+@pytest.mark.parametrize("suffix,operation", RACE_VIEWS)
+@pytest.mark.parametrize(
+    "invalid", ["source_extra", "source_token", "nested_extra", "scalar", "raw_extra"]
+)
+def test_http_race_corrupted_response_instances_fail_closed(
+    race_http, suffix, operation, invalid
+):
+    client, operations, provider, analyzer = race_http
+    valid = operations[operation].return_value
+    private = (
+        "token=SUPER_SECRET_TEST_VALUE"
+        if invalid == "source_token"
+        else "SECRET_PROVIDER_INTERNAL_DETAIL"
+    )
+    if invalid in {"source_extra", "source_token", "raw_extra"}:
+        source = dict(valid.source.model_dump(mode="python"), secret=private)
+        corrupted = valid.model_copy(update={"source": source})
+        if invalid == "raw_extra":
+            corrupted = dict(valid.model_dump(mode="python"), source=source)
+    else:
+        summary = valid.participant if suffix else valid.participants[0]
+        if invalid == "nested_extra":
+            counts = summary.pit_evidence_counts.model_copy(update={"secret": private})
+            summary = summary.model_copy(update={"pit_evidence_counts": counts})
+        else:
+            summary = summary.model_copy(update={"unassociated_evidence_count": True})
+        corrupted = valid.model_copy(
+            update={"participant": summary} if suffix else {"participants": (summary,)}
+        )
+    operations[operation].return_value = corrupted
+    response = client.get(RACE_URL + suffix)
+    assert response.status_code == 500
+    assert response.text == "Internal Server Error"
+    assert private not in response.text
+    assert private not in str(response.headers)
+    operations[operation].assert_called_once()
+    provider.assert_not_called()
+    analyzer.assert_not_called()
+
+
+@pytest.mark.parametrize("suffix,operation", RACE_VIEWS)
+def test_http_race_valid_raw_output_preserves_contract(race_http, suffix, operation):
+    client, operations, _, _ = race_http
+    payload = operations[operation].return_value.model_dump(mode="python")
+    expected = operations[operation].return_value.model_dump(mode="json")
+    operations[operation].return_value = payload
+    response = client.get(RACE_URL + suffix)
+    assert response.status_code == 200
+    assert response.json() == expected
+    operations[operation].assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "suffix", ["/pit-stops", "/pit-context", "/pit-lane", "/race-context/pits"]
+)
+def test_http_race_has_no_pit_only_surface(race_http, suffix):
+    client, operations, provider, analyzer = race_http
+    assert (
+        client.get(RACE_URL.removesuffix("/race-context") + suffix).status_code == 404
+    )
+    for mock in (*operations.values(), provider, analyzer):
+        mock.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "suffix,operation",
+    [
+        ("", "load_session_race_context"),
+        ("/drivers/4", "load_driver_race_context"),
+        ("/drivers/27", "load_driver_race_context"),
+        ("/drivers/999", "load_driver_race_context"),
+    ],
+)
+def test_http_race_real_service_is_repeatable_and_one_snapshot(
+    monkeypatch, race_context_session_factory, pace_session_factory, suffix, operation
+):
+    from app import main
+    from app.analytics import race_context_analytics as analytics
+    from app.data import f1_data
+    from app.services import race_context_service
+
+    source = race_context_session_factory()
+    snapshot = pace_session_factory(laps=source.laps, results=source.results)
+    trace = Mock()
+    for owner, name, mock in (
+        (main, operation, Mock(wraps=getattr(race_context_service, operation))),
+        (f1_data, "load_session", Mock(return_value=snapshot)),
+        (
+            f1_data,
+            "map_race_context_inputs",
+            Mock(wraps=f1_data.map_race_context_inputs),
+        ),
+        (f1_data, "map_session_summary", Mock(wraps=f1_data.map_session_summary)),
+        (analytics, "analyze_race_context", Mock(wraps=analytics.analyze_race_context)),
+    ):
+        trace.attach_mock(mock, name)
+        monkeypatch.setattr(owner, name, mock)
+    outputs = []
+    with TestClient(main.app) as client:
+        for _ in range(3):
+            response = client.get(RACE_URL + suffix)
+            assert response.status_code == (404 if suffix.endswith("999") else 200)
+            outputs.append(response.text)
+            for name in (
+                operation,
+                "load_session",
+                "map_race_context_inputs",
+                "map_session_summary",
+                "analyze_race_context",
+            ):
+                getattr(trace, name).assert_called_once()
+            assert trace.map_race_context_inputs.call_args.args[0] is snapshot
+            assert trace.map_session_summary.call_args.args[0] is snapshot
+            json.dumps(response.json(), allow_nan=False)
+            trace.reset_mock()
+    assert outputs[0] == outputs[1] == outputs[2]
+    if suffix.endswith("999"):
+        assert response.json()["error"]["code"] == "driver_not_found"
+    elif suffix.endswith("27"):
+        assert response.json()["lap_contexts"] == response.json()["pit_evidence"] == []
+    elif suffix:
+        assert response.json()["pit_evidence"][0]["state"] == "complete"
+
+
+@pytest.mark.parametrize("suffix", ["", "/drivers/4"])
+def test_http_race_known_generated_unavailable_evidence_stays_200(
+    monkeypatch, race_context_session_factory, pace_session_factory, suffix
+):
+    from app.data import f1_data
+    from app.main import app
+
+    source = race_context_session_factory()
+    source.laps["FastF1Generated"] = True
+    source.laps["TrackStatus"] = None
+    snapshot = pace_session_factory(laps=source.laps, results=source.results)
+    loader = Mock(return_value=snapshot)
+    monkeypatch.setattr(f1_data, "load_session", loader)
+    with TestClient(app) as client:
+        response = client.get(RACE_URL + suffix)
+    assert response.status_code == 200
+    payload = response.json()
+    selected = payload["participant"] if suffix else payload["participants"][1]
+    assert selected["latest_lap_context"] is None
+    assert selected["pit_evidence_counts"]["unavailable"] == 2
+    if suffix:
+        assert len(payload["lap_contexts"]) == 1
+        assert all(item["state"] == "unavailable" for item in payload["pit_evidence"])
+    loader.assert_called_once_with(2025, "Italian Grand Prix", "Race")
+
+
+@pytest.mark.parametrize("suffix", ["", "/drivers/4"])
+@pytest.mark.parametrize(
+    "stage", ["load_session", "map_race_context_inputs", "map_session_summary"]
+)
+def test_http_race_real_provider_and_normalization_failures(
+    monkeypatch, suffix, stage, race_context_session_factory, pace_session_factory
+):
+    from app.data import f1_data
+    from app.main import app
+
+    source = race_context_session_factory()
+    snapshot = pace_session_factory(laps=source.laps, results=source.results)
+    loader = Mock(return_value=snapshot)
+    monkeypatch.setattr(f1_data, "load_session", loader)
+    failure = Mock(
+        side_effect=f1_data.DataSourceUnavailableError("PRIVATE_SCHEMA_DETAIL")
+    )
+    monkeypatch.setattr(f1_data, stage, failure)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(RACE_URL + suffix)
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "data_source_unavailable"
+    assert "PRIVATE_SCHEMA_DETAIL" not in response.text
+    failure.assert_called_once()
+
+
+def test_http_race_new_route_bodies_only_delegate_and_translate():
+    import ast
+    import inspect
+
+    from app import main
+
+    for name, service_name in (
+        ("get_session_race_context", "load_session_race_context"),
+        ("get_driver_race_context", "load_driver_race_context"),
+    ):
+        function = ast.parse(inspect.getsource(getattr(main, name))).body[0]
+        assert all(
+            isinstance(node.func, ast.Name)
+            or (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id
+                in {"SessionRaceContextResponse", "DriverRaceContextResponse"}
+                and node.func.attr == "model_validate"
+            )
+            for statement in function.body
+            for node in ast.walk(statement)
+            if isinstance(node, ast.Call)
+        )
+        calls = [
+            node.func.id
+            for statement in function.body
+            for node in ast.walk(statement)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        ]
+        assert calls.count(service_name) == 1
+        assert set(calls) == {
+            service_name,
+            "_race_context_response_input",
+            "_error_response",
+        }
+        assert not any(
+            isinstance(
+                node, (ast.For, ast.While, ast.ListComp, ast.DictComp, ast.BinOp)
+            )
+            for statement in function.body
+            for node in ast.walk(statement)
+        )
+        handlers = function.body[0].handlers
+        assert all(
+            isinstance(handler.type, ast.Name)
+            and handler.type.id
+            in {
+                "SessionNotSupportedError",
+                "DriverNotFoundError",
+                "DataSourceUnavailableError",
+            }
+            for handler in handlers
+        )
 
 
 def identity(number="2"):

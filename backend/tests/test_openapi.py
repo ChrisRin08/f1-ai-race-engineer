@@ -30,6 +30,241 @@ def test_openapi_health_response_forbids_additional_properties() -> None:
     assert health_schema["additionalProperties"] is False
 
 
+RACE_CONTEXT_PATH = (
+    "/api/v1/seasons/{year}/events/{event}/sessions/{session}/race-context"
+)
+RACE_CONTEXT_DRIVER_PATH = RACE_CONTEXT_PATH + "/drivers/{driver_number}"
+
+
+@pytest.mark.parametrize(
+    "path,operation_id,response_name",
+    [
+        (RACE_CONTEXT_PATH, "getSessionRaceContext", "SessionRaceContextResponse"),
+        (RACE_CONTEXT_DRIVER_PATH, "getDriverRaceContext", "DriverRaceContextResponse"),
+    ],
+)
+def test_race_context_openapi_operations(path, operation_id, response_name):
+    operations = app.openapi()["paths"][path]
+    assert set(operations) == {"get"}
+    operation = operations["get"]
+    assert operation["operationId"] == operation_id
+    assert set(operation["responses"]) == {"200", "404", "422", "503"}
+    parameters = {p["name"]: p for p in operation["parameters"]}
+    assert set(parameters) == {"year", "event", "session"} | (
+        {"driver_number"} if path == RACE_CONTEXT_DRIVER_PATH else set()
+    )
+    assert all(p["required"] and p["in"] == "path" for p in parameters.values())
+    assert parameters["year"]["schema"]["type"] == "integer"
+    assert parameters["year"]["schema"]["minimum"] == 1950
+    for key in ("event", "session"):
+        assert parameters[key]["schema"]["type"] == "string"
+        assert parameters[key]["schema"]["pattern"] == r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    if "driver_number" in parameters:
+        assert parameters["driver_number"]["schema"]["type"] == "string"
+        assert parameters["driver_number"]["schema"]["pattern"] == r"^[1-9][0-9]*$"
+    for status, name in [
+        ("200", response_name),
+        ("404", "ErrorResponse"),
+        ("422", "HTTPValidationError"),
+        ("503", "ErrorResponse"),
+    ]:
+        assert operation["responses"][status]["content"]["application/json"][
+            "schema"
+        ] == {"$ref": "#/components/schemas/" + name}
+    assert "central" in operation["description"]
+
+
+def test_race_context_openapi_is_exactly_additive():
+    from fastapi.openapi.utils import get_openapi
+
+    previous = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=[
+            route
+            for route in app.routes
+            if route.path not in (RACE_CONTEXT_PATH, RACE_CONTEXT_DRIVER_PATH)
+        ],
+    )
+    generated = app.openapi()
+    race_context_paths = {
+        path
+        for path in generated["paths"]
+        if path == RACE_CONTEXT_PATH or path.startswith(RACE_CONTEXT_PATH + "/")
+    }
+    assert race_context_paths == {RACE_CONTEXT_PATH, RACE_CONTEXT_DRIVER_PATH}
+    assert generated["paths"].keys() - previous["paths"].keys() == {
+        RACE_CONTEXT_PATH,
+        RACE_CONTEXT_DRIVER_PATH,
+    }
+    for path, operation in previous["paths"].items():
+        assert generated["paths"][path] == operation
+    for name, schema in previous["components"]["schemas"].items():
+        assert generated["components"]["schemas"][name] == schema
+    assert (
+        len(
+            generated["components"]["schemas"].keys()
+            - previous["components"]["schemas"].keys()
+        )
+        == 19
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "RaceContextParticipantIdentity",
+        "RaceClassificationContext",
+        "TrackStatusContext",
+        "LapContextReference",
+        "LeaderReference",
+        "LapCompletionContext",
+        "PitBoundaryEvidence",
+        "PitTransitionContext",
+        "PitLaneEvidence",
+        "PitEvidenceCounts",
+        "SessionRaceContextParticipant",
+        "SessionRaceContextResponse",
+        "DriverRaceContextResponse",
+    ],
+)
+def test_race_context_openapi_objects_are_strict_required_and_public(name):
+    schema = app.openapi()["components"]["schemas"][name]
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == set(schema["properties"])
+    assert (
+        not {
+            "source_occurrence",
+            "source_row_position",
+            "order_index",
+            "session_time_ns",
+            "completion_time_ns",
+        }
+        & schema["properties"].keys()
+    )
+
+
+@pytest.mark.parametrize(
+    "name,values",
+    [
+        ("RaceContextEvidenceStatus", ["available", "conflicting", "unavailable"]),
+        ("RaceContextAvailability", ["available", "unavailable"]),
+        (
+            "EqualDistanceTimeDeficitStatus",
+            ["available", "not_applicable", "unavailable"],
+        ),
+        (
+            "NormalizedTrackStatus",
+            [
+                "green",
+                "yellow",
+                "safety_car",
+                "virtual_safety_car",
+                "virtual_safety_car_ending",
+                "red_flag",
+                "unknown",
+            ],
+        ),
+        (
+            "PitEvidenceState",
+            [
+                "complete",
+                "unpaired_entry",
+                "unpaired_exit",
+                "conflicting",
+                "unavailable",
+            ],
+        ),
+        ("PitBoundaryKind", ["entry", "exit"]),
+    ],
+)
+def test_race_context_openapi_enums(name, values):
+    schema = app.openapi()["components"]["schemas"][name]
+    assert schema["enum"] == values
+    assert schema["type"] == "string"
+
+
+def test_race_context_openapi_units_nullable_fields_and_compact_composition():
+    schemas = app.openapi()["components"]["schemas"]
+    for name in (
+        "RaceClassificationContext",
+        "LapCompletionContext",
+        "PitBoundaryEvidence",
+        "PitTransitionContext",
+        "PitLaneEvidence",
+        "PitEvidenceCounts",
+    ):
+        for field, value in schemas[name]["properties"].items():
+            branches = value.get("anyOf", [value])
+            for branch in branches:
+                if branch.get("type") == "integer":
+                    assert branch["minimum"] == (
+                        1
+                        if field
+                        in {
+                            "lap_number",
+                            "source_evidence_count",
+                            "finish_position",
+                            "lap_completion_position",
+                            "reported_stint",
+                            "source_boundary_count",
+                            "entry_lap_number",
+                            "exit_lap_number",
+                        }
+                        else 0
+                    )
+            if field.endswith("_ms"):
+                assert {"type": "null"} in branches
+                assert any(branch.get("type") == "integer" for branch in branches)
+    assert (
+        schemas["LeaderReference"]["properties"]["lap_completion_session_time_ms"][
+            "minimum"
+        ]
+        == 0
+    )
+    assert (
+        schemas["TrackStatusContext"]["properties"]["track_statuses"]["uniqueItems"]
+        is True
+    )
+    assert schemas["PitLaneEvidence"]["properties"]["boundaries"]["minItems"] == 1
+    assert set(schemas["SessionRaceContextResponse"]["properties"]) == {
+        "context",
+        "participants",
+        "source",
+    }
+    assert set(schemas["SessionRaceContextParticipant"]["properties"]) == {
+        "driver",
+        "classification",
+        "latest_lap_context",
+        "pit_evidence_counts",
+        "unassociated_evidence_count",
+    }
+    assert set(schemas["DriverRaceContextResponse"]["properties"]) == {
+        "context",
+        "participant",
+        "lap_contexts",
+        "pit_evidence",
+        "source",
+    }
+    for name in (
+        "LapCompletionContext",
+        "PitLaneEvidence",
+        "PitTransitionContext",
+        "TrackStatusContext",
+        "LeaderReference",
+        "SessionRaceContextResponse",
+        "DriverRaceContextResponse",
+    ):
+        assert schemas[name].get("description"), (
+            f"Missing approved public meaning: {name}"
+        )
+    assert "not GPS" in schemas["LapCompletionContext"]["description"]
+    assert "never a live gap" in schemas["LapCompletionContext"]["description"]
+    assert "not stationary service" in " ".join(
+        schemas["PitLaneEvidence"]["description"].split()
+    )
+
+
 def test_health_response_rejects_unexpected_property() -> None:
     with pytest.raises(ValidationError):
         HealthResponse.model_validate({"status": "ok", "unexpected": True})

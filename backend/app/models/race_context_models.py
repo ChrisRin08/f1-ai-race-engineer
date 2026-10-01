@@ -12,6 +12,9 @@ from app.models.session_models import ContractModel, SourceProvenance
 
 
 class RaceContextEvidenceStatus(StrEnum):
+    """Whether one source-backed interpretation is available, competing normalized
+    claims conflict, or required usable evidence is unavailable."""
+
     AVAILABLE = "available"
     CONFLICTING = "conflicting"
     UNAVAILABLE = "unavailable"
@@ -23,6 +26,10 @@ class RaceContextAvailability(StrEnum):
 
 
 class EqualDistanceTimeDeficitStatus(StrEnum):
+    """Available only for trustworthy same-completed-lap observations; not_applicable
+    when the selected participant is laps behind; unavailable when required
+    evidence is missing, invalid, generated, or conflicting."""
+
     AVAILABLE = "available"
     NOT_APPLICABLE = "not_applicable"
     UNAVAILABLE = "unavailable"
@@ -94,7 +101,13 @@ class RaceContextContractModel(ContractModel):
 
 
 class RaceContextParticipantIdentity(RaceContextContractModel):
-    driver_number: DriverIdentity
+    driver_number: DriverIdentity = Field(
+        description=(
+            "Authoritative provider participant identity. Numeric identities are "
+            "ordered numerically; any nonnumeric identity follows in normalized "
+            "authoritative-identity order."
+        )
+    )
     abbreviation: str | None
     full_name: str | None
     team_name: str | None
@@ -110,6 +123,11 @@ class RaceClassificationContext(RaceContextContractModel):
 
 
 class TrackStatusContext(RaceContextContractModel):
+    """Ordered, de-duplicated lap-overlap status evidence. Unknown is never treated
+    as green. is_disrupted is true for any known disruption, false only for
+    trustworthy fully understood non-disrupted evidence, and null when unavailable
+    or indeterminate."""
+
     availability: Availability
     track_statuses: Annotated[
         tuple[TrackStatus, ...], BeforeValidator(_require_ordered_collection)
@@ -151,12 +169,21 @@ class LapContextReference(RaceContextContractModel):
 
 
 class LeaderReference(RaceContextContractModel):
+    """Latest trustworthy lap-leader completion known at or before the selected
+    driver's completion timestamp."""
+
     driver_number: DriverIdentity
     lap_number: PositiveInteger
     lap_completion_session_time_ms: NonNegativeInteger
 
 
 class LapCompletionContext(RaceContextContractModel):
+    """One compact normalized driver/lap item. Position is provider-exposed
+    lap-completion race position, not GPS, physical coordinates, instantaneous
+    pit-boundary position, or live timing position. equal_distance_time_deficit_ms
+    is selected-driver completion minus lap-leader completion for the same
+    completed lap, never a live gap."""
+
     driver_number: DriverIdentity
     lap_number: PositiveInteger
     evidence_status: EvidenceStatus
@@ -252,6 +279,10 @@ class LapCompletionContext(RaceContextContractModel):
 
 
 class PitBoundaryEvidence(RaceContextContractModel):
+    """One compact pit entry or exit candidate with duplicate multiplicity. Exactly
+    one of entry_session_time_ms or exit_session_time_ms can be populated
+    consistently with kind."""
+
     kind: BoundaryKind
     evidence_status: EvidenceStatus
     source_evidence_count: PositiveInteger
@@ -282,6 +313,10 @@ class PitBoundaryEvidence(RaceContextContractModel):
 
 
 class PitTransitionContext(RaceContextContractModel):
+    """Reported compound/stint and lap-context reference from exactly the
+    entry/in-lap or exit/out-lap completion row. It is not instantaneous context
+    at the pit boundary, and no nearby racing lap is substituted."""
+
     availability: EvidenceStatus
     lap_context_reference: LapContextReference | None
     reported_compound: str | None
@@ -340,6 +375,11 @@ def _validate_boundary_context(
 
 
 class PitLaneEvidence(RaceContextContractModel):
+    """Complete, unpaired, conflicting, or unavailable pit-lane evidence.
+    entry_to_exit_elapsed_ms is pit-lane entry-to-exit elapsed time, not
+    stationary service, mechanic, or tire-change duration. Changed fields compare
+    reported values and do not confirm a physical tire change."""
+
     state: EvidenceState
     boundaries: Annotated[
         tuple[PitBoundaryEvidence, ...], BeforeValidator(_require_ordered_collection)
@@ -509,6 +549,8 @@ class PitLaneEvidence(RaceContextContractModel):
 
 
 class PitEvidenceCounts(RaceContextContractModel):
+    """The five state counts must sum to total."""
+
     total: NonNegativeInteger
     complete: NonNegativeInteger
     unpaired_entry: NonNegativeInteger
@@ -531,6 +573,9 @@ class PitEvidenceCounts(RaceContextContractModel):
 
 
 class SessionRaceContextParticipant(RaceContextContractModel):
+    """Compact participant projection. It intentionally has no complete lap-context
+    or pit-evidence collection."""
+
     driver: RaceContextParticipantIdentity
     classification: RaceClassificationContext
     latest_lap_context: LapCompletionContext | None
@@ -554,6 +599,9 @@ def _participant_order_key(driver_number: str) -> tuple[int, int, str]:
 
 
 class SessionRaceContextResponse(RaceContextContractModel):
+    """Exactly one compact entry per authoritative participant, already in canonical
+    participant order, projected from one central analysis."""
+
     context: AnalyticsSessionContext
     participants: Annotated[
         tuple[SessionRaceContextParticipant, ...],
@@ -614,6 +662,10 @@ def _validate_pit_collection_order(items: tuple[PitLaneEvidence, ...]) -> None:
 
 
 class DriverRaceContextResponse(RaceContextContractModel):
+    """Auditable driver projection from the same central analysis as the session
+    resource. Lap contexts and pit evidence must already be in canonical order and
+    are never silently repaired."""
+
     context: AnalyticsSessionContext
     participant: SessionRaceContextParticipant
     lap_contexts: Annotated[
