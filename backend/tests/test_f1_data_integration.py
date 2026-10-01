@@ -1,11 +1,139 @@
 import json
 import os
+import re
+from collections import Counter
+from dataclasses import asdict
+from enum import Enum
 from math import isfinite
 from unittest.mock import Mock
 
 import pytest
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.skipif(
+    os.getenv("F1_RUN_INTEGRATION") != "1",
+    reason="Set F1_RUN_INTEGRATION=1 to run the real FastF1 integration test.",
+)
+def test_real_monza_race_context_from_one_snapshot(monkeypatch) -> None:
+    from app.analytics import race_context_analytics as analytics
+    from app.data import f1_data
+    from app.services import race_context_service as service
+
+    loader = Mock(wraps=f1_data.load_session)
+    monkeypatch.setattr(f1_data, "load_session", loader)
+    snapshot = f1_data.load_session(2025, "Italian Grand Prix", "Race")
+    inputs = f1_data.map_race_context_inputs(snapshot)
+    summary = f1_data.map_session_summary(snapshot)
+    analysis = analytics.analyze_race_context(inputs)
+    loader.assert_called_once_with(2025, "Italian Grand Prix", "Race")
+    assert inputs.participants and inputs.lap_rows
+    assert len(inputs.lap_rows) == len(snapshot.laps)
+    assert sum(p.result_evidence_count for p in inputs.participants) == len(
+        snapshot.results
+    )
+    numbers = [p.identity.driver_number for p in analysis.participants]
+    assert set(numbers) == {p.identity.driver_number for p in inputs.participants}
+    assert len(numbers) == len(set(numbers))
+    assert numbers == sorted(
+        numbers,
+        key=lambda n: (0, int(n), "") if re.fullmatch(r"[1-9][0-9]*", n) else (1, 0, n),
+    )
+
+    pending = [asdict(inputs)]
+    while pending:
+        value = pending.pop()
+        if type(value) is dict:
+            pending.extend(value.values())
+        elif type(value) is tuple:
+            pending.extend(value)
+        elif isinstance(value, Enum):
+            assert type(value).__module__ == analytics.__name__
+        else:
+            assert type(value) in {str, int, bool, type(None)}
+
+    for participant in analysis.participants:
+        rows = [
+            row
+            for row in inputs.lap_rows
+            if row.driver_number == participant.identity.driver_number
+        ]
+        keyed = [
+            row
+            for row in rows
+            if row.lap_number.state == analytics.NormalizedValueState.AVAILABLE
+        ]
+        assert sum(
+            lap.source_evidence_count for lap in participant.lap_contexts
+        ) == len(keyed)
+        assert participant.unassociated_evidence_count == len(rows) - len(keyed)
+        expected_boundaries = Counter(
+            (kind, row.lap_number.value)
+            for row in keyed
+            for kind, timestamp in (
+                (analytics.PitBoundaryKind.ENTRY, row.pit_entry_time_ns),
+                (analytics.PitBoundaryKind.EXIT, row.pit_exit_time_ns),
+            )
+            if timestamp.state != analytics.NormalizedValueState.ABSENT
+        )
+        represented = Counter()
+        for item in participant.pit_evidence:
+            assert item.source_boundary_count == sum(
+                boundary.source_evidence_count for boundary in item.boundaries
+            )
+            for boundary in item.boundaries:
+                represented[(boundary.kind, boundary.lap_number)] += (
+                    boundary.source_evidence_count
+                )
+        assert represented == expected_boundaries
+        states = Counter(item.state.value for item in participant.pit_evidence)
+        counts = asdict(participant.pit_evidence_counts)
+        assert counts.pop("total") == len(participant.pit_evidence)
+        assert counts == {
+            state.value: states[state.value] for state in analytics.PitEvidenceState
+        }
+
+    assert inputs.unassociated_row_count == sum(
+        row.driver_number not in set(numbers) for row in inputs.lap_rows
+    )
+    assert all(analytics.analyze_race_context(inputs) == analysis for _ in range(3))
+
+    # Exercise both real projections of this retained result, not another acquisition.
+    shared = Mock(return_value=(summary, analysis))
+    monkeypatch.setattr(service, "_load_analysis", shared)
+    no_reload = Mock(side_effect=AssertionError("Acceptance must reuse its snapshot"))
+    for name in ("load_session", "map_race_context_inputs", "map_session_summary"):
+        monkeypatch.setattr(f1_data, name, no_reload)
+    selectors = (2025, "italian-grand-prix", "race")
+    field = service.load_session_race_context(*selectors)
+    selected = next(
+        p
+        for p in field.participants
+        if re.fullmatch(r"[1-9][0-9]*", p.driver.driver_number)
+    )
+    detail = service.load_driver_race_context(*selectors, selected.driver.driver_number)
+    assert detail.participant == selected
+    assert detail.context == field.context
+    assert field.source.provider == detail.source.provider == "FastF1"
+    assert [p.driver.driver_number for p in field.participants] == numbers
+    internal = next(
+        p
+        for p in analysis.participants
+        if p.identity.driver_number == selected.driver.driver_number
+    )
+    assert len(detail.lap_contexts) == len(internal.lap_contexts)
+    assert len(detail.pit_evidence) == len(internal.pit_evidence)
+    assert service.load_session_race_context(*selectors) == field
+    assert (
+        service.load_driver_race_context(*selectors, selected.driver.driver_number)
+        == detail
+    )
+    no_reload.assert_not_called()
+    loader.assert_called_once()
+    assert shared.call_count == 4
+    for response in (field, detail):
+        json.dumps(response.model_dump(mode="json"), allow_nan=False)
 
 
 @pytest.mark.skipif(

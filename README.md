@@ -47,7 +47,7 @@ Some features below are post-v0.1 and remain deferred until the architecture jus
 This repository is a monorepo:
 
 - `frontend/` will contain the Next.js dashboard.
-- `backend/` contains the FastAPI application, FastF1 loading/mapping, and deterministic lap, pace, and tire-stint analytics.
+- `backend/` contains the FastAPI application, FastF1 loading/mapping, and deterministic lap, pace, tire-stint, and race-context analytics.
 - `docs/` contains product and architecture documentation.
 
 The frontend is responsible for presentation and user interaction. It must not perform authoritative race analytics or strategy calculations.
@@ -86,7 +86,7 @@ The backend is the authoritative source for data loading, validation, determinis
 
 ## Status
 
-The Python 3.12 backend exposes health, session summaries, individual lap/pace evidence, session pace ranking, directional driver comparison, and observed tire-stint analytics with strict Pydantic contracts. The currently supported control session is the **2025 Italian Grand Prix / Monza / Race**.
+The Python 3.12 backend exposes health, session summaries, individual lap/pace evidence, session pace ranking, directional driver comparison, observed tire-stint analytics, and auditable pit-lane/lap-boundary race context with strict Pydantic contracts. The currently supported control session is the **2025 Italian Grand Prix / Monza / Race**.
 
 The session-summary, lap/pace, and tire-stint capabilities have passed controlled offline coverage and separately opted-in Monza real-data acceptance. The Next.js dashboard, dynamic session coverage, AI/ML, persistence, authentication, deployment, and live telemetry remain deferred.
 
@@ -153,6 +153,60 @@ management, changing environmental conditions, or other unmodeled race
 effects. See the [Feature 003 quickstart](specs/003-tire-stint-analytics/quickstart.md)
 for the exact policy and verification commands.
 
+## Pit-Lane and Lap-Boundary Race Context
+
+Feature 004 adds exactly two resources:
+
+- `GET /api/v1/seasons/{year}/events/{event}/sessions/{session}/race-context`
+- `GET /api/v1/seasons/{year}/events/{event}/sessions/{session}/race-context/drivers/{driver_number}`
+
+The session response is compact: one canonically ordered entry per authoritative
+participant, with source-backed classification, latest trustworthy lap context,
+pit-state counts, and unassociated-evidence count. Driver detail repeats that
+summary and adds the complete compact lap-context series and all pit evidence.
+Participants with no usable evidence remain present; an empty series does not
+mean the driver is unknown. There is no separate pit-only resource.
+
+`lap_completion_position` is provider-exposed lap-completion race position, not
+live position, GPS, or instantaneous on-track position. An available
+`equal_distance_time_deficit_ms` is the selected driver's trustworthy completion
+timestamp minus the lap leader's completion timestamp for the **same completed
+lap number**. It is not a live/current race gap, physical separation, or TV
+timing gap. `laps_behind` is evaluated at the selected completion; when positive,
+the time deficit is null with status `not_applicable`. Missing or conflicting
+required evidence produces `unavailable`, not an estimated gap.
+
+Pit evidence states are `complete`, `unpaired_entry`, `unpaired_exit`,
+`conflicting`, and `unavailable`. Only a trusted complete pair has
+`entry_to_exit_elapsed_ms`: pit-lane entry-to-exit elapsed time, **not stationary
+service time, mechanic time, or tire-change duration**. Before/after context
+comes from the entry/in-lap and exit/out-lap completion rows without a nearby-lap
+fallback. Reported compound/stint changes do not confirm a physical tire change.
+Duplicate source multiplicity and generated evidence remain auditable; pit
+counts count evidence items, not source occurrences.
+
+Times are calculated in exact nanoseconds and published as half-up integer
+milliseconds. Services preserve central analytical ordering. Strict models
+reject publicly provable contradictions without sorting or repair; equal public
+milliseconds do not prove equal exact timestamps. TrackStatus preserves source
+observation order, with explicit availability and nullable disruption meaning.
+The transport freshly validates service output, including existing model
+instances, and rejects malformed internal responses with a safe `500`.
+
+For the dedicated opt-in provider-compatibility check, from `backend/`:
+
+```bash
+F1_RUN_INTEGRATION=1 PYTHONDONTWRITEBYTECODE=1 \
+  uv run --frozen --no-sync pytest -p no:cacheprovider -m integration \
+  tests/test_f1_data_integration.py::test_real_monza_race_context_from_one_snapshot -q
+```
+
+This uses one 2025 Italian GP Race snapshot to check compatibility, provenance,
+repeatability, and evidence reconciliation. It does not freeze Monza outcomes
+as product rules or require every evidence state to occur. Controlled offline
+fixtures remain the authority for edge cases. See the
+[Feature 004 quickstart](specs/004-pit-race-context/quickstart.md).
+
 ## Test the Backend
 
 From `backend/`, after setup, with `F1_RUN_INTEGRATION` unset:
@@ -175,6 +229,6 @@ Only when intentionally validating real data with network access, opt in explici
 F1_RUN_INTEGRATION=1 uv run --frozen --no-sync pytest -m integration
 ```
 
-This invokes application-owned session, pace, and tire-stint services and may download FastF1 data into the ignored cache. It is separate from routine testing.
+This exercises application-owned session, pace, tire-stint, and race-context work and may download FastF1 data into the ignored cache. It is separate from routine testing.
 
 See the [tire-stint quickstart](specs/003-tire-stint-analytics/quickstart.md), [lap/pace quickstart](specs/002-lap-pace-analytics/quickstart.md), [session-summary quickstart](specs/001-backend-f1-data-access/quickstart.md), [architecture](docs/architecture.md), and [demo scope](docs/demo-v0.1.md) for details.

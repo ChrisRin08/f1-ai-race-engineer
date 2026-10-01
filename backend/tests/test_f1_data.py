@@ -283,6 +283,9 @@ def test_race_context_reported_compound_and_stint_normalization(
     "raw,availability,statuses,is_disrupted",
     [
         ("1", "available", ("green",), False),
+        (np.str_("1"), "available", ("green",), False),
+        (np.array("1"), "available", ("green",), False),
+        (np.array(["1"]), "available", ("green",), False),
         ("2", "available", ("yellow",), True),
         ("4", "available", ("safety_car",), True),
         ("5", "available", ("red_flag",), True),
@@ -314,6 +317,53 @@ def test_race_context_track_status_normalization_and_disruption_truth_table(
     assert tuple(status.value for status in evidence.statuses) == statuses
     assert evidence.is_disrupted is is_disrupted
     assert all(type(status) is NormalizedTrackStatus for status in evidence.statuses)
+
+
+def test_race_context_nonscalar_track_status_preserves_other_row_facts(
+    race_context_session_factory,
+):
+    from app.analytics.race_context_analytics import (
+        NormalizedValueState,
+        TrackStatusAvailability,
+    )
+    from app.data.f1_data import map_race_context_inputs
+
+    session = race_context_session_factory()
+    session.results = session.results.iloc[[0]].copy()
+    session.laps = session.laps.iloc[[0]].copy()
+    session.laps["TrackStatus"] = session.laps["TrackStatus"].astype(object)
+    session.laps.at[0, "TrackStatus"] = np.array(["1", "2"])
+
+    mapped = map_race_context_inputs(session)
+
+    assert len(mapped.participants) == 1
+    assert mapped.participants[0].identity.driver_number == "1"
+    assert len(mapped.lap_rows) == 1
+    row = mapped.lap_rows[0]
+    assert row.driver_number == "1"
+    assert row.lap_number.state is NormalizedValueState.AVAILABLE
+    assert row.lap_number.value == 1
+    assert row.lap_completion_time_ns.value == 90_000_000_123
+    assert row.lap_completion_position.value == 1
+    assert row.reported_compound == "MEDIUM"
+    assert row.reported_stint == 1
+    assert row.track_status.availability is TrackStatusAvailability.UNAVAILABLE
+    assert row.track_status.statuses == ()
+    assert row.track_status.is_disrupted is None
+    _assert_application_owned(mapped)
+
+
+def test_race_context_nonscalar_authoritative_identity_fails(
+    race_context_session_factory,
+):
+    from app.data.f1_data import DataSourceUnavailableError, map_race_context_inputs
+
+    session = race_context_session_factory()
+    session.results["DriverNumber"] = session.results["DriverNumber"].astype(object)
+    session.results.at[0, "DriverNumber"] = np.array(["1", "2"])
+
+    with pytest.raises(DataSourceUnavailableError, match="participant identity"):
+        map_race_context_inputs(session)
 
 
 def test_race_context_preserves_every_lap_row_occurrence(

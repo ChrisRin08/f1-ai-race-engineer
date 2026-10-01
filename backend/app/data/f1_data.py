@@ -579,6 +579,8 @@ def _normalize_missing(value: object) -> object | None:
     except ValueError:
         pass
 
+    if isinstance(value, (np.ndarray, pd.Series)) and value.size != 1:
+        return value
     item = getattr(value, "item", None)
     if callable(item):
         return item()
@@ -588,6 +590,8 @@ def _normalize_missing(value: object) -> object | None:
 def _optional_text(value: object) -> str | None:
     value = _normalize_missing(value)
     if value is None:
+        return None
+    if isinstance(value, (np.ndarray, pd.Series)):
         return None
     text = str(value).strip()
     return text or None

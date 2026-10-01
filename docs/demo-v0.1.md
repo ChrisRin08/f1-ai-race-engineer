@@ -20,7 +20,7 @@ The initial validation dataset is the 2025 Italian Grand Prix at Monza, Race ses
 
 ## Included Scope
 
-Current backend capability: health, session summary, deterministic representative lap evidence, overall pace ranking, directional driver comparison, and observed tire-stint analytics for the Monza control race. Feature 002 uses median pace, a five-lap minimum, published-millisecond ties/ranks/deltas, and explicit exclusion counts. Its condition-unaware 120% anomaly heuristic is separate from Feature 003, which uses reported stint and tire-age facts, requires six eligible distinct ages, and publishes an observational Theil-Sen trend where available. The frontend and the remaining broader analytics below remain demo targets, not delivered functionality.
+Current backend capability: health, session summary, deterministic representative lap evidence, overall pace ranking, directional driver comparison, observed tire-stint analytics, and auditable pit-lane/lap-boundary race context for the Monza control race. Feature 002 uses median pace, a five-lap minimum, published-millisecond ties/ranks/deltas, and explicit exclusion counts. Its condition-unaware 120% anomaly heuristic is separate from Feature 003, which uses reported stint and tire-age facts, requires six eligible distinct ages, and publishes an observational Theil-Sen trend where available. The frontend and the remaining broader analytics below remain demo targets, not delivered functionality.
 
 Demo v0.1 targets:
 
@@ -38,7 +38,7 @@ The intended first analytics slice includes:
 - Representative or average race pace
 - Tire compounds
 - Stint lengths
-- Pit-stop timing
+- Pit-lane entry/exit evidence and entry-to-exit elapsed time (not stationary service timing)
 - Basic driver pace comparison where supported by the available data
 
 ## Deferred Scope
@@ -57,7 +57,7 @@ The following are explicitly out of scope for Demo v0.1 unless the plan changes:
 - LLM-generated strategy calculations
 - Cache eviction, Docker volumes, or production cache infrastructure
 - CI/CD workflow creation
-- Dynamic session coverage and analytics beyond the approved session, pace, and tire-stint resources
+- Dynamic session coverage and analytics beyond the approved session, pace, tire-stint, and race-context resources
 
 ## Feature 003 Demonstration Flow
 
@@ -110,6 +110,66 @@ explicitly identifies an `observational_association`, sets
 `isolated_physical_tire_wear` to false, and lists fuel load or burn, traffic,
 track evolution, driver tire management, changing environmental conditions,
 and other unmodeled race effects as unadjusted factors.
+
+## Feature 004 Demonstration Flow
+
+With the same API running, request the compact race-context view:
+
+```bash
+curl --fail --silent \
+  http://127.0.0.1:8000/api/v1/seasons/2025/events/italian-grand-prix/sessions/race/race-context
+```
+
+Inspect `source.provider` (`FastF1`), the canonical authoritative participants,
+source-backed classification, `latest_lap_context`, `pit_evidence_counts`, and
+`unassociated_evidence_count`. A known participant with no usable evidence is
+still present; no lap or pit event is invented. The compact response does not
+duplicate complete lap or pit collections.
+
+Choose a canonical numeric `driver_number` from that response, set
+`DRIVER_NUMBER`, and request its detail:
+
+```bash
+curl --fail --silent \
+  "http://127.0.0.1:8000/api/v1/seasons/2025/events/italian-grand-prix/sessions/race/race-context/drivers/${DRIVER_NUMBER}"
+```
+
+Driver detail repeats the compact participant summary and adds the complete
+compact `lap_contexts` and `pit_evidence`. Separate requests load separate
+snapshots; equality of their shared facts assumes the same underlying source
+facts. Each operation performs one central analysis, not per-driver or per-pit
+acquisition.
+
+Use the audit fields to explain:
+
+- `lap_completion_position`: provider-exposed race position at lap completion,
+  not live position, GPS, or instantaneous pit-entry position.
+- `laps_behind`: completed-lap deficit at the selected completion. Positive
+  values require a null equal-distance metric with `not_applicable` status.
+- `equal_distance_time_deficit_ms`: selected driver minus lap leader completion
+  for the same completed lap number, when trustworthy. It is not a current,
+  live, TV, or physical gap. Unusable required evidence remains `unavailable`.
+- Pit states: `complete`, `unpaired_entry`, `unpaired_exit`, `conflicting`, or
+  `unavailable`. Inspect whichever states occur; do not require this historical
+  snapshot to demonstrate all of them.
+- `entry_to_exit_elapsed_ms`: available only for a trustworthy complete pair;
+  it measures elapsed time from pit-lane entry to exit, not stationary service,
+  mechanic work, or tire-change duration.
+- Entry/exit lap references and reported compound/stint context: from exactly
+  the in-lap/out-lap completion rows, without nearby-lap fallback. Changed flags
+  compare reported values; they do not confirm a physical tire change.
+- Generated state, source multiplicity, and ordered track statuses: evidence
+  remains explicit. Unknown status is not green; unavailable status has an
+  empty list and null disruption flag.
+
+The real-provider acceptance slice uses one retained 2025 Italian GP Race
+snapshot to validate compatibility, provenance, evidence reconciliation,
+determinism, and finite JSON. Run the dedicated opt-in command in the
+[README](../README.md#pit-lane-and-lap-boundary-race-context) only with provider
+access authorized. Controlled offline fixtures, not incidental Monza outcomes,
+establish incomplete, conflicting, generated, rounding-collision, and other
+edge-case policy. This feature supplies auditable context, not pit loss,
+strategy recommendations, predictions, a dashboard, or live-race analysis.
 
 ## Acceptance Criteria
 

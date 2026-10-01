@@ -133,16 +133,93 @@ schemas do not reproduce word for word, such as joint-intercept or precedence
 descriptions. Such prose-only differences are acceptable when those semantics
 remain equivalent and verified.
 
-The broader Demo v0.1 analytics direction includes the following. Tire compounds
-and observed stint trends are implemented; pit-stop timing remains future work:
+The broader Demo v0.1 analytics direction includes the following. Tire compounds,
+observed stint trends, and pit-lane entry-to-exit evidence are implemented;
+stationary pit-service timing is not provided:
 
 - Lap times
 - Fastest lap
 - Representative or average race pace
 - Tire compounds
 - Stint lengths and observed within-stint pace trends
-- Pit-stop timing
+- Pit-lane entry/exit evidence and entry-to-exit elapsed time
 - Basic driver pace comparison where supported by the available data
+
+## Race-Context Responsibility Boundaries
+
+The implemented backend is organized by responsibility, not feature number:
+
+```text
+backend/app/
+  data/f1_data.py
+  analytics/{lap_analytics,stint_analytics,race_context_analytics}.py
+  models/{session_models,pace_models,stint_models,race_context_models}.py
+  services/{session_support,pace_service,stint_service,race_context_service}.py
+  main.py
+```
+
+Package initializers are declaration-only, not compatibility re-export layers.
+The Feature 004 flow is:
+
+```text
+public FastF1 Session.results / Session.laps
+  -> data.f1_data provider acquisition + normalization
+  -> immutable application-owned RaceContextInput
+  -> analytics.race_context_analytics.analyze_race_context
+  -> services.race_context_service passive projection
+  -> models.race_context_models strict public response
+  -> main thin HTTP transport + fresh response validation
+```
+
+`data/f1_data.py` owns FastF1/Pandas/NumPy conversion, explicit absent/invalid
+facts, results-roster authority, and exact integer-nanosecond timestamps. No
+provider objects enter analytics. The existing loader disables telemetry,
+weather, and messages; Feature 004 uses public results and laps only.
+
+`analytics/race_context_analytics.py` owns consolidation, trusted Position-1
+leader references, lap deficits, equal-distance deficits, pit association,
+evidence states, source multiplicity, canonical ordering, latest trustworthy
+context, counts, and the immutable `SessionRaceContextAnalysis`. All subtraction
+uses exact nanoseconds before half-up millisecond publication. Disrupted and
+generated evidence remains auditable, without claiming stronger trust than the
+source supports.
+
+`services/session_support.py` owns the existing selector policy independently
+of transport. `services/race_context_service.py` resolves it before provider
+access, loads once, normalizes once, maps session metadata from the same object,
+and analyzes once per operation. Its shared pipeline then projects either a
+compact field summary or one driver's complete lap/pit collections. It does not
+sort, count, select latest, round, or pair. Separate HTTP requests are separate
+operations; there is no cross-request analysis cache.
+
+`models/race_context_models.py` rejects strict-scalar, required-nullable,
+identity, reference, count, and state contradictions. Participant/lap ordering
+is fully observable; pit ordering checks are bounded by published facts. Equal
+milliseconds do not prove an exact chronology tie. TrackStatus uniqueness and
+truth-table consistency are validated without inventing enum order or
+reconstructing the original observation sequence. Validators never calculate,
+sort, deduplicate, pair, or repair.
+
+`main.py` exposes exactly the compact `/race-context` and driver-detail
+`/race-context/drivers/{driver_number}` resources under the session hierarchy.
+Each calls one service operation and translates established 404/503 errors;
+unexpected failures remain safe 500s. Service-produced responses, including
+existing Pydantic instances, are expanded while retaining undeclared injected
+data and freshly validated before transport. Malformed internal output fails
+closed rather than being sanitized. FastAPI response-model binding remains
+active. This validation step does not perform analytics or access the provider.
+
+### Feature 005 reuse boundary
+
+Future Feature 005 can consume the trusted central domain result without
+reimplementing provider normalization, pit association, lap-completion context,
+equal-distance separation, or evidence qualification. That result is independent
+of Pydantic responses, services, and transport. No Feature 005 algorithm, API,
+simulation, or implementation is introduced here.
+
+The opted-in Monza compatibility test validates one retained provider snapshot
+and both projections; controlled fixtures own edge-case policy. Neither live
+observations nor rounded public values redefine domain ordering.
 
 ## Current Technologies
 
